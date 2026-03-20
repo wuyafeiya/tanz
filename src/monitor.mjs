@@ -126,6 +126,22 @@ export function createMonitor(nodes, options = {}) {
         return
       }
 
+      if (method === 'POST' && pathname === '/api/telegram-test') {
+        if (!telegram.enabled) {
+          respondJson(response, 400, { error: 'Telegram 未启用，请先配置 bot token 和 chat id' })
+          return
+        }
+
+        const alert = createAlert(
+          'test',
+          'Telegram 测试消息',
+          `来自 ${host}:${state.server.port} 的监控测试消息。`,
+        )
+        await sendTelegramAlert(telegram, alert)
+        respondJson(response, 200, { ok: true })
+        return
+      }
+
       respondJson(response, 404, { error: 'not found' })
     }
     catch (error) {
@@ -349,12 +365,7 @@ async function sendTelegramAlert(telegram, alert) {
     return
   }
 
-  try {
-    await telegram.sendMessage(`[${alert.level.toUpperCase()}] ${alert.title}\n${alert.message}\n${alert.at}`)
-  }
-  catch (error) {
-    console.error(error instanceof Error ? `Telegram 通知失败: ${error.message}` : String(error))
-  }
+  await telegram.sendMessage(`[${alert.level.toUpperCase()}] ${alert.title}\n${alert.message}\n${alert.at}`)
 }
 
 function createTelegramNotifier(botToken, chatId) {

@@ -83,6 +83,7 @@ JP SSR 01   DOWN    curl: (28) Connection timed out after 10002 milliseconds
 - 本地实时仪表盘
 - 页面内可修改轮询间隔
 - 手动触发立即探测
+- 页面内可一键发送 Telegram 测试消息
 - 节点掉线时可使用浏览器通知提醒
 - 连续失败达到阈值后再告警，避免短暂抖动误报
 - 支持 Telegram 掉线与恢复通知
