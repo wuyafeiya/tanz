@@ -40,13 +40,13 @@ pnpm probe --config ./nodes.json
 启动持续监控和本地仪表盘:
 
 ```bash
-pnpm monitor --config ./nodes.json --interval 30 --port 3456
+pnpm monitor --config ./nodes.json --interval 10 --port 3456
 ```
 
 启用并发探测、失败阈值去抖和 Telegram 通知:
 
 ```bash
-pnpm monitor --config ./nodes.json --interval 30 --concurrency 8 --failure-threshold 3 --telegram-bot-token <token> --telegram-chat-id <chatId>
+pnpm monitor --config ./nodes.json --interval 10 --concurrency 8 --failure-threshold 3 --telegram-bot-token <token> --telegram-chat-id <chatId>
 ```
 
 也可以通过环境变量提供 Telegram 配置:
@@ -81,6 +81,7 @@ JP SSR 01   DOWN    curl: (28) Connection timed out after 10002 milliseconds
 
 - 持续轮询节点状态
 - 并发探测，加快大批量节点轮询速度
+- 单节点失败后会在当前轮次内快速重试，不必等下一次全局轮询
 - 本地实时仪表盘
 - 页面内可修改轮询间隔
 - 手动触发立即探测
@@ -89,6 +90,15 @@ JP SSR 01   DOWN    curl: (28) Connection timed out after 10002 milliseconds
 - 连续失败达到阈值后再告警，避免短暂抖动误报
 - 支持 Telegram 掉线与恢复通知
 - Telegram 通知可单独走代理，默认 `http://127.0.0.1:7897`
+
+当前快速重试策略:
+
+- 单个节点一次失败后，会在当前轮次内继续立即重试
+- 默认总共尝试 3 次
+- 每次重试之间间隔约 0.8 秒
+- 不区分首次和重试，每次单独尝试默认都是 2s 启动超时和 8s 请求超时
+- 每个节点面板会实时显示当前尝试次数和当前秒表
+- 最终结果才会进入本轮状态判断与告警逻辑
 
 ## 配置格式
 

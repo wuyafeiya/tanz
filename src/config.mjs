@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 
 /**
  * @typedef {'ss' | 'ssr'} NodeType
@@ -34,6 +34,46 @@ export async function loadNodes(filePath) {
   }
 
   return data.map(validateNode)
+}
+
+/**
+ * @param {string} filePath
+ * @param {string} nodeId
+ * @param {string} server
+ */
+export async function updateNodeServer(filePath, nodeId, server) {
+  const nextServer = typeof server === 'string' ? server.trim() : ''
+  if (!nextServer) {
+    throw new Error('server 不能为空')
+  }
+
+  const raw = await readFile(filePath, 'utf8')
+  const data = JSON.parse(raw)
+
+  if (!Array.isArray(data)) {
+    throw new Error('配置文件必须是节点数组')
+  }
+
+  const index = data.findIndex(item => {
+    if (!item || typeof item !== 'object') {
+      return false
+    }
+
+    const record = /** @type {Record<string, unknown>} */ (item)
+    const id = typeof record.id === 'string' && record.id.trim() !== '' ? record.id : String(record.name ?? '')
+    return id === nodeId
+  })
+
+  if (index < 0) {
+    throw new Error(`未找到节点: ${nodeId}`)
+  }
+
+  const record = /** @type {Record<string, unknown>} */ (data[index])
+  record.server = nextServer
+
+  await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8')
+
+  return validateNode(record)
 }
 
 /**

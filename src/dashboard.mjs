@@ -302,6 +302,23 @@ export function renderDashboardHtml(options) {
         gap: 8px;
       }
 
+      .node-editor {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      .node-editor input {
+        flex: 1 1 220px;
+        min-width: 0;
+        padding: 12px 14px;
+      }
+
+      .node-editor button {
+        padding: 12px 16px;
+      }
+
       .badge {
         display: inline-flex;
         align-items: center;
@@ -601,6 +618,7 @@ export function renderDashboardHtml(options) {
 
         nextRunTicker = setInterval(() => {
           renderNextRun()
+          refreshNodeLiveClocks()
         }, 1000)
       }
 
@@ -680,12 +698,66 @@ export function renderDashboardHtml(options) {
           case 'up': return 'UP'
           case 'down': return 'DOWN'
           case 'running': return 'RUNNING'
+          case 'paused': return 'PAUSED'
           default: return 'IDLE'
         }
       }
 
       function nodeStatusClass(status) {
         return status === 'up' || status === 'down' ? status : ''
+      }
+
+      function formatDurationSeconds(durationMs) {
+        if (typeof durationMs !== 'number' || !Number.isFinite(durationMs)) {
+          return '-'
+        }
+
+        return (durationMs / 1000).toFixed(durationMs >= 10000 ? 0 : 1)
+      }
+
+      function formatLiveSeconds(value) {
+        if (!value) {
+          return '-'
+        }
+
+        const startedAt = new Date(value)
+        if (Number.isNaN(startedAt.getTime())) {
+          return '-'
+        }
+
+        return String(Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 1000)))
+      }
+
+      function refreshNodeLiveClocks() {
+        if (!latestSnapshot?.nodes) {
+          return
+        }
+
+        for (const node of latestSnapshot.nodes) {
+          const clock = nodeList.querySelector('[data-node-live-clock="' + node.id + '"]')
+          const label = nodeList.querySelector('[data-node-attempt-label="' + node.id + '"]')
+
+          if (clock) {
+            if (node.status === 'running' && node.attemptStartedAt) {
+              clock.textContent = formatLiveSeconds(node.attemptStartedAt) + 's'
+            }
+            else {
+              clock.textContent = formatDurationSeconds(node.lastDurationMs) + ' 秒'
+            }
+          }
+
+          if (label) {
+            if (node.paused) {
+              label.textContent = '已暂停轮询'
+            }
+            else if (node.status === 'running' && node.currentAttempt > 0) {
+              label.textContent = '第 ' + node.currentAttempt + '/' + node.currentAttemptMax + ' 次尝试'
+            }
+            else {
+              label.textContent = '失败即时重试 ' + (latestSnapshot?.settings?.retryAttempts ?? 3) + ' 次'
+            }
+          }
+        }
       }
 
       function renderNodes(nodes) {
@@ -701,6 +773,9 @@ export function renderDashboardHtml(options) {
             : node.lastCheckedAt
               ? '最近一次探测正常'
               : '等待首轮探测'
+          const stateText = node.paused
+            ? (node.pauseReason || '已暂停轮询')
+            : '最近恢复：' + formatDateTime(node.lastOkAt)
 
           item.innerHTML = \`
             <div class="node-main">
@@ -711,13 +786,18 @@ export function renderDashboardHtml(options) {
               <div class="node-sub">\${errorText}</div>
               <div class="badges">
                 <span class="badge"><span class="dot \${nodeStatusClass(node.status)}"></span>连续失败 \${node.consecutiveFailures} 次</span>
-                <span class="badge">最近耗时 \${node.lastDurationMs ?? '-'} ms</span>
+                <span class="badge">\${node.status === 'running' && node.attemptStartedAt ? '当前耗时' : '本轮耗时'} <span data-node-live-clock="\${node.id}">\${node.status === 'running' && node.attemptStartedAt ? formatLiveSeconds(node.attemptStartedAt) + 's' : formatDurationSeconds(node.lastDurationMs) + ' 秒'}</span></span>
                 <span class="badge">最后探测 \${formatDateTime(node.lastCheckedAt)}</span>
+                <span class="badge" data-node-attempt-label="\${node.id}">\${node.paused ? '已暂停轮询' : node.status === 'running' && node.currentAttempt > 0 ? '第 ' + node.currentAttempt + '/' + node.currentAttemptMax + ' 次尝试' : '失败即时重试 ' + (latestSnapshot?.settings?.retryAttempts ?? 3) + ' 次'}</span>
+              </div>
+              <div class="node-editor">
+                <input type="text" data-node-server-input="\${node.id}" value="\${node.server}" spellcheck="false" />
+                <button class="secondary" data-node-server-save="\${node.id}">保存服务器地址</button>
               </div>
             </div>
             <div class="state">
               <div class="pill \${nodeStatusClass(node.status)}">\${nodeStatusLabel(node.status)}</div>
-              <small>最近恢复：\${formatDateTime(node.lastOkAt)}</small>
+              <small>\${stateText}</small>
             </div>
           \`
           nodeList.appendChild(item)
@@ -758,10 +838,11 @@ export function renderDashboardHtml(options) {
         cycleMeta.textContent = cycle.running
           ? '当前正在执行一轮探测…'
           : '上次完成于 ' + formatDateTime(cycle.lastCompletedAt)
-        footerNote.textContent = '监听 ' + server.origin + ' · 目标 ' + settings.targetUrl + ' · 启动超时 ' + settings.startupTimeoutMs + 'ms · 请求超时 ' + settings.requestTimeoutSeconds + 's · 并发 ' + settings.concurrency + ' · 告警阈值 ' + settings.failureThreshold + ' 次' + (settings.telegramEnabled ? ' · Telegram 已启用' : '')
+        footerNote.textContent = '监听 ' + server.origin + ' · 目标 ' + settings.targetUrl + ' · 单次启动超时 ' + settings.startupTimeoutMs + 'ms · 单次请求超时 ' + settings.requestTimeoutSeconds + 's · 并发 ' + settings.concurrency + ' · 告警阈值 ' + settings.failureThreshold + ' 次' + (settings.telegramEnabled ? ' · Telegram 已启用' : '')
         renderTelegramDebug(telegram)
         renderNodes(nodes)
         renderAlerts(alerts)
+        refreshNodeLiveClocks()
       }
 
       function notifyNodeDown(node) {
@@ -830,6 +911,38 @@ export function renderDashboardHtml(options) {
         }
         finally {
           probeButton.disabled = false
+        }
+      })
+
+      nodeList.addEventListener('click', async event => {
+        const button = event.target.closest('[data-node-server-save]')
+        if (!button) {
+          return
+        }
+
+        const nodeId = button.getAttribute('data-node-server-save')
+        const input = nodeList.querySelector('[data-node-server-input="' + nodeId + '"]')
+        if (!nodeId || !input) {
+          showToast('未找到节点输入框')
+          return
+        }
+
+        const server = input.value.trim()
+        if (!server) {
+          showToast('服务器地址不能为空')
+          return
+        }
+
+        button.disabled = true
+        try {
+          await postJson('/api/node-server', { nodeId, server })
+          showToast('服务器地址已保存')
+        }
+        catch (error) {
+          showToast(error instanceof Error ? error.message : String(error))
+        }
+        finally {
+          button.disabled = false
         }
       })
 

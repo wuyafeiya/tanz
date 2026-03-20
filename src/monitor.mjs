@@ -1,14 +1,20 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { updateNodeServer } from './config.mjs'
 import { renderDashboardHtml } from './dashboard.mjs'
 import { probeNode } from './probe.mjs'
 
 const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_PORT = 3456
-const DEFAULT_INTERVAL_SECONDS = 30
+const DEFAULT_INTERVAL_SECONDS = 10
 const DEFAULT_CONCURRENCY = 4
 const DEFAULT_FAILURE_THRESHOLD = 3
+const DEFAULT_RETRY_ATTEMPTS = 3
+const DEFAULT_RETRY_DELAY_MS = 800
+const DEFAULT_ATTEMPT_STARTUP_TIMEOUT_MS = 2000
+const DEFAULT_ATTEMPT_REQUEST_TIMEOUT_SECONDS = 8
 const MAX_ALERTS = 30
 
 /**
@@ -17,7 +23,7 @@ const MAX_ALERTS = 30
 
 /**
  * @param {ProbeNode[]} nodes
- * @param {{ host?: string, port?: number, intervalSeconds?: number, concurrency?: number, failureThreshold?: number, targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number, telegramBotToken?: string, telegramChatId?: string, telegramProxy?: string }} options
+ * @param {{ configFile?: string, host?: string, port?: number, intervalSeconds?: number, concurrency?: number, failureThreshold?: number, targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number, telegramBotToken?: string, telegramChatId?: string, telegramProxy?: string }} options
  */
 export function createMonitor(nodes, options = {}) {
   const host = options.host ?? DEFAULT_HOST
@@ -29,9 +35,11 @@ export function createMonitor(nodes, options = {}) {
   let concurrency = normalizePositiveInt(options.concurrency ?? DEFAULT_CONCURRENCY, '并发数')
   let failureThreshold = normalizePositiveInt(options.failureThreshold ?? DEFAULT_FAILURE_THRESHOLD, '失败阈值')
   let revision = 0
-  let cycleTimer
-  let isRunning = false
   const eventClients = new Set()
+  const nodeJobs = nodes.map(() => ({
+    timer: undefined,
+    inFlight: false,
+  }))
 
   const state = {
     startedAt: new Date().toISOString(),
@@ -40,8 +48,10 @@ export function createMonitor(nodes, options = {}) {
       concurrency,
       failureThreshold,
       targetUrl: options.targetUrl,
-      startupTimeoutMs: options.startupTimeoutMs,
-      requestTimeoutSeconds: options.requestTimeoutSeconds,
+      startupTimeoutMs: DEFAULT_ATTEMPT_STARTUP_TIMEOUT_MS,
+      requestTimeoutSeconds: DEFAULT_ATTEMPT_REQUEST_TIMEOUT_SECONDS,
+      retryAttempts: DEFAULT_RETRY_ATTEMPTS,
+      retryDelayMs: DEFAULT_RETRY_DELAY_MS,
       telegramEnabled: telegram.enabled,
       telegramProxy: telegram.proxy,
       telegramDebug: telegram.debug,
@@ -66,11 +76,17 @@ export function createMonitor(nodes, options = {}) {
       status: 'idle',
       consecutiveFailures: 0,
       alertActive: false,
+      paused: false,
+      pauseReason: undefined,
+      nextRunAt: undefined,
       lastCheckedAt: undefined,
       lastOkAt: undefined,
       lastDurationMs: undefined,
       lastError: undefined,
       lastAlertAt: undefined,
+      currentAttempt: 0,
+      currentAttemptMax: DEFAULT_RETRY_ATTEMPTS,
+      attemptStartedAt: undefined,
     })),
     alerts: [],
     telegram: {
@@ -128,14 +144,14 @@ export function createMonitor(nodes, options = {}) {
           state.settings.failureThreshold = failureThreshold
         }
 
-        planNextRun(intervalSeconds * 1000)
+        rescheduleActiveNodes(intervalSeconds * 1000)
         publish()
         respondJson(response, 200, snapshot())
         return
       }
 
       if (method === 'POST' && pathname === '/api/probe') {
-        void runCycle()
+        triggerImmediateProbeAll()
         respondJson(response, 202, { accepted: true })
         return
       }
@@ -158,6 +174,32 @@ export function createMonitor(nodes, options = {}) {
         state.telegram.lastResponseSnippet = result.responseSnippet
         publish()
         respondJson(response, 200, { ok: true, responseSnippet: result.responseSnippet })
+        return
+      }
+
+      if (method === 'POST' && pathname === '/api/node-server') {
+        if (!options.configFile) {
+          respondJson(response, 400, { error: '当前监控未绑定配置文件' })
+          return
+        }
+
+        const body = await readJsonBody(request)
+        const nodeId = typeof body.nodeId === 'string' ? body.nodeId : ''
+        const nextServer = typeof body.server === 'string' ? body.server : ''
+        const updated = await updateNodeServer(options.configFile, nodeId, nextServer)
+        const index = nodes.findIndex(node => node.id === updated.id)
+
+        if (index < 0) {
+          throw new Error(`未找到节点: ${updated.id}`)
+        }
+
+        nodes[index].server = updated.server
+        const current = state.nodes[index]
+        current.server = updated.server
+        resetNodeState(index)
+        scheduleNode(index, 0)
+        publish()
+        respondJson(response, 200, { ok: true, node: { ...state.nodes[index] } })
         return
       }
 
@@ -203,14 +245,19 @@ export function createMonitor(nodes, options = {}) {
 
       state.server.port = address.port
       state.server.origin = `http://${host}:${address.port}`
-      publish()
-      void runCycle()
 
+      for (let index = 0; index < state.nodes.length; index += 1) {
+        scheduleNode(index, 0)
+      }
+
+      publish()
       return snapshot()
     },
 
     async stop() {
-      clearTimeout(cycleTimer)
+      for (const job of nodeJobs) {
+        clearTimeout(job.timer)
+      }
 
       for (const client of eventClients) {
         client.end()
@@ -230,6 +277,7 @@ export function createMonitor(nodes, options = {}) {
   }
 
   function snapshot() {
+    syncGlobalState()
     return {
       revision,
       startedAt: state.startedAt,
@@ -244,11 +292,40 @@ export function createMonitor(nodes, options = {}) {
   }
 
   function publish() {
+    syncGlobalState()
     revision += 1
     const data = `data: ${JSON.stringify(snapshot())}\n\n`
     for (const client of eventClients) {
       client.write(data)
     }
+  }
+
+  function syncGlobalState() {
+    state.cycle.running = nodeJobs.some(job => job.inFlight)
+
+    let nextRunAtMs = Number.POSITIVE_INFINITY
+    let up = 0
+    let down = 0
+
+    for (const node of state.nodes) {
+      if (node.status === 'up') {
+        up += 1
+      }
+      else if (node.status === 'down' || node.status === 'paused') {
+        down += 1
+      }
+
+      if (!node.paused && node.nextRunAt) {
+        const timestamp = new Date(node.nextRunAt).getTime()
+        if (!Number.isNaN(timestamp) && timestamp < nextRunAtMs) {
+          nextRunAtMs = timestamp
+        }
+      }
+    }
+
+    state.summary.up = up
+    state.summary.down = down
+    state.cycle.nextRunAt = Number.isFinite(nextRunAtMs) ? new Date(nextRunAtMs).toISOString() : undefined
   }
 
   function openEventStream(response) {
@@ -265,113 +342,164 @@ export function createMonitor(nodes, options = {}) {
     })
   }
 
-  async function runCycle() {
-    if (isRunning) {
+  function clearNodeTimer(index) {
+    clearTimeout(nodeJobs[index].timer)
+    nodeJobs[index].timer = undefined
+    state.nodes[index].nextRunAt = undefined
+  }
+
+  function scheduleNode(index, delayMs) {
+    const current = state.nodes[index]
+    if (current.paused) {
+      clearNodeTimer(index)
       return
     }
 
-    isRunning = true
-    clearTimeout(cycleTimer)
-    state.cycle.running = true
+    clearNodeTimer(index)
+    const runAtMs = Date.now() + delayMs
+    current.nextRunAt = new Date(runAtMs).toISOString()
+    nodeJobs[index].timer = setTimeout(() => {
+      void runNodeProbe(index, false)
+    }, delayMs)
+  }
+
+  function rescheduleActiveNodes(delayMs) {
+    for (let index = 0; index < state.nodes.length; index += 1) {
+      if (nodeJobs[index].inFlight || state.nodes[index].paused) {
+        continue
+      }
+      scheduleNode(index, delayMs)
+    }
+  }
+
+  function triggerImmediateProbeAll() {
+    for (let index = 0; index < state.nodes.length; index += 1) {
+      if (nodeJobs[index].inFlight) {
+        continue
+      }
+
+      if (state.nodes[index].paused) {
+        state.nodes[index].paused = false
+        state.nodes[index].pauseReason = undefined
+      }
+
+      scheduleNode(index, 0)
+    }
+    publish()
+  }
+
+  function resetNodeState(index) {
+    const current = state.nodes[index]
+    current.status = 'idle'
+    current.consecutiveFailures = 0
+    current.alertActive = false
+    current.paused = false
+    current.pauseReason = undefined
+    current.lastError = undefined
+    current.currentAttempt = 0
+    current.currentAttemptMax = state.settings.retryAttempts
+    current.attemptStartedAt = undefined
+  }
+
+  async function runNodeProbe(index, resumedFromPause) {
+    const job = nodeJobs[index]
+    const current = state.nodes[index]
+    const node = nodes[index]
+
+    if (job.inFlight || current.paused) {
+      return
+    }
+
+    clearNodeTimer(index)
+    job.inFlight = true
     state.cycle.lastStartedAt = new Date().toISOString()
-    state.cycle.nextRunAt = undefined
-    markNodesRunning()
     publish()
 
     try {
-      const results = await mapWithConcurrency(nodes, concurrency, async (node, index) => {
-        const result = await probeNode(node, {
-          targetUrl: state.settings.targetUrl,
-          startupTimeoutMs: state.settings.startupTimeoutMs,
-          requestTimeoutSeconds: state.settings.requestTimeoutSeconds,
-        })
-
-        return { index, node, result }
+      const result = await probeNodeWithRetry(node, {
+        targetUrl: state.settings.targetUrl,
+        startupTimeoutMs: state.settings.startupTimeoutMs,
+        requestTimeoutSeconds: state.settings.requestTimeoutSeconds,
+        retryAttempts: state.settings.retryAttempts,
+        retryDelayMs: state.settings.retryDelayMs,
+        onAttemptStart(attempt, maxAttempts) {
+          current.status = 'running'
+          current.currentAttempt = attempt
+          current.currentAttemptMax = maxAttempts
+          current.attemptStartedAt = new Date().toISOString()
+          publish()
+        },
+        onAttemptFinish() {
+          current.attemptStartedAt = undefined
+          publish()
+        },
       })
 
-      let up = 0
-      let down = 0
+      const previousStatus = current.status
+      current.lastCheckedAt = result.checkedAt
+      current.lastDurationMs = result.durationMs
+      current.currentAttempt = 0
+      current.currentAttemptMax = state.settings.retryAttempts
+      current.attemptStartedAt = undefined
 
-      for (const { index, node, result } of results) {
-        const current = state.nodes[index]
-        const previousStatus = current.status
-        current.lastCheckedAt = result.checkedAt
-        current.lastDurationMs = result.durationMs
+      if (result.ok) {
+        current.status = 'up'
+        current.lastOkAt = result.checkedAt
+        current.lastError = undefined
+        current.consecutiveFailures = 0
 
-        if (result.ok) {
-          current.status = 'up'
-          current.lastOkAt = result.checkedAt
-          current.lastError = undefined
-          current.consecutiveFailures = 0
-          up += 1
-
-          if (current.alertActive) {
-            current.alertActive = false
-            current.lastAlertAt = result.checkedAt
-            const alert = createAlert('ok', `${node.name} 已恢复`, `${node.name} 在 ${result.checkedAt} 恢复可用。`)
-            pushAlert(alert)
-            await sendTelegramAlert(telegram, alert)
-          }
-          else if (previousStatus === 'down') {
-            pushAlert(createAlert('ok', `${node.name} 已恢复`, `${node.name} 在 ${result.checkedAt} 恢复可用。`))
-          }
-
-          continue
-        }
-
-        current.status = 'down'
-        current.lastError = result.error
-        current.consecutiveFailures += 1
-        down += 1
-
-        if (!current.alertActive && current.consecutiveFailures >= failureThreshold) {
-          current.alertActive = true
+        if (current.alertActive || resumedFromPause) {
+          current.alertActive = false
+          current.paused = false
+          current.pauseReason = undefined
           current.lastAlertAt = result.checkedAt
-          const alert = createAlert(
-            'down',
-            `${node.name} 掉线`,
-            `${node.name} 已连续失败 ${current.consecutiveFailures} 次：${result.error ?? 'unknown error'}`,
-          )
+          const alert = createAlert('ok', '节点恢复', `${node.name} ${node.server}`)
           pushAlert(alert)
           await sendTelegramAlert(telegram, alert)
-          continue
+        }
+        else if (previousStatus === 'down') {
+          pushAlert(createAlert('ok', '节点恢复', `${node.name} ${node.server}`))
         }
 
-        if (previousStatus === 'up' || previousStatus === 'running' || previousStatus === 'idle') {
-          pushAlert(createAlert(
-            'warn',
-            `${node.name} 首次失败`,
-            `${node.name} 本轮探测失败，但未达到 ${failureThreshold} 次告警阈值。`,
-          ))
-        }
+        scheduleNode(index, intervalSeconds * 1000)
+        return
       }
 
-      state.summary.up = up
-      state.summary.down = down
+      current.status = 'down'
+      current.lastError = result.error
+      current.consecutiveFailures += Math.max(1, result.retryAttemptsUsed ?? 1)
+
+      if (!current.alertActive && current.consecutiveFailures >= failureThreshold) {
+        current.alertActive = true
+        current.status = 'paused'
+        current.paused = true
+        current.pauseReason = '达到失败阈值后已暂停，请改 IP 或手动立即探测恢复'
+        current.lastAlertAt = result.checkedAt
+        const alert = createAlert(
+          'down',
+          '节点疑似故障',
+          `${node.name} ${node.server}`,
+        )
+        pushAlert(alert)
+        await sendTelegramAlert(telegram, alert)
+        return
+      }
+
+      if (previousStatus === 'up' || previousStatus === 'idle') {
+        pushAlert(createAlert(
+          'warn',
+          `${node.name} 首次失败`,
+          `${node.name} 本轮探测失败，但未达到 ${failureThreshold} 次告警阈值。`,
+        ))
+      }
+
+      scheduleNode(index, intervalSeconds * 1000)
     }
     finally {
-      isRunning = false
-      state.cycle.running = false
+      job.inFlight = false
       state.cycle.lastCompletedAt = new Date().toISOString()
-      planNextRun(intervalSeconds * 1000)
       publish()
     }
-  }
-
-  function markNodesRunning() {
-    for (const node of state.nodes) {
-      if (node.status === 'idle') {
-        node.status = 'running'
-      }
-    }
-  }
-
-  function planNextRun(delayMs) {
-    clearTimeout(cycleTimer)
-    state.cycle.nextRunAt = new Date(Date.now() + delayMs).toISOString()
-    cycleTimer = setTimeout(() => {
-      void runCycle()
-    }, delayMs)
   }
 
   function pushAlert(alert) {
@@ -394,7 +522,7 @@ async function sendTelegramAlert(telegram, alert) {
     return { responseSnippet: '' }
   }
 
-  return await telegram.sendMessage(`[${alert.level.toUpperCase()}] ${alert.title}\n${alert.message}\n${alert.at}`)
+  return await telegram.sendMessage(buildTelegramMessage(alert))
 }
 
 function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7897') {
@@ -479,24 +607,43 @@ function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7
   }
 }
 
-async function mapWithConcurrency(items, concurrency, mapper) {
-  if (items.length === 0) {
-    return []
+async function probeNodeWithRetry(node, options) {
+  const retryAttempts = Math.max(1, options.retryAttempts)
+  const startedAt = Date.now()
+  let lastResult
+
+  for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
+    options.onAttemptStart?.(attempt, retryAttempts)
+    try {
+      lastResult = await probeNode(node, {
+        targetUrl: options.targetUrl,
+        startupTimeoutMs: options.startupTimeoutMs,
+        requestTimeoutSeconds: options.requestTimeoutSeconds,
+      })
+    }
+    finally {
+      options.onAttemptFinish?.()
+    }
+
+    if (lastResult.ok) {
+      return {
+        ...lastResult,
+        durationMs: Date.now() - startedAt,
+        retryAttemptsUsed: attempt,
+      }
+    }
+
+    if (attempt < retryAttempts) {
+      await sleep(options.retryDelayMs)
+    }
   }
 
-  const results = new Array(items.length)
-  let nextIndex = 0
-
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const currentIndex = nextIndex
-      nextIndex += 1
-      results[currentIndex] = await mapper(items[currentIndex], currentIndex)
-    }
-  })
-
-  await Promise.all(workers)
-  return results
+  return {
+    ...lastResult,
+    durationMs: Date.now() - startedAt,
+    error: lastResult?.error,
+    retryAttemptsUsed: retryAttempts,
+  }
 }
 
 function respondHtml(response, html) {
@@ -551,4 +698,38 @@ function maskChatId(value) {
     return text
   }
   return `***${text.slice(-4)}`
+}
+
+function buildTelegramMessage(alert) {
+  if (alert.title === '节点疑似故障' || alert.title === '节点恢复') {
+    return `${alert.title}\n${alert.message}\n${formatChinaTime(alert.at)}`
+  }
+
+  if (alert.title === 'Telegram 测试消息') {
+    return alert.title
+  }
+
+  return `${alert.title}\n${alert.message}`
+}
+
+function formatChinaTime(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return String(value)
+  }
+
+  const formatter = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
+
+  const parts = formatter.formatToParts(date)
+  const map = Object.fromEntries(parts.map(part => [part.type, part.value]))
+  return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`
 }
