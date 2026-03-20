@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { basename } from 'node:path'
+import { platform } from 'node:os'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 const DEFAULT_TARGET_URL = 'https://www.gstatic.com/generate_204'
@@ -181,11 +182,12 @@ async function waitForProxyReady(child, timeoutMs) {
  * @param {number} timeoutSeconds
  */
 async function runCurlProbe(localPort, targetUrl, timeoutSeconds) {
+  const nullDevice = platform() === 'win32' ? 'NUL' : '/dev/null'
   const args = [
     '--silent',
     '--show-error',
     '--fail',
-    '--output', '/dev/null',
+    '--output', nullDevice,
     '--proxy', `socks5h://127.0.0.1:${localPort}`,
     '--max-time', String(timeoutSeconds),
     targetUrl,
