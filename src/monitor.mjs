@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { updateNodeServer } from './config.mjs'
 import { renderDashboardHtml } from './dashboard.mjs'
 import { probeNode } from './probe.mjs'
@@ -10,6 +11,8 @@ const DEFAULT_PORT = 3456
 const DEFAULT_INTERVAL_SECONDS = 30
 const DEFAULT_CONCURRENCY = 4
 const DEFAULT_FAILURE_THRESHOLD = 3
+const DEFAULT_RETRY_ATTEMPTS = 3
+const DEFAULT_RETRY_DELAY_MS = 1500
 const MAX_ALERTS = 30
 
 /**
@@ -43,6 +46,8 @@ export function createMonitor(nodes, options = {}) {
       targetUrl: options.targetUrl,
       startupTimeoutMs: options.startupTimeoutMs,
       requestTimeoutSeconds: options.requestTimeoutSeconds,
+      retryAttempts: DEFAULT_RETRY_ATTEMPTS,
+      retryDelayMs: DEFAULT_RETRY_DELAY_MS,
       telegramEnabled: telegram.enabled,
       telegramProxy: telegram.proxy,
       telegramDebug: telegram.debug,
@@ -304,10 +309,12 @@ export function createMonitor(nodes, options = {}) {
 
     try {
       const results = await mapWithConcurrency(nodes, concurrency, async (node, index) => {
-        const result = await probeNode(node, {
+        const result = await probeNodeWithRetry(node, {
           targetUrl: state.settings.targetUrl,
           startupTimeoutMs: state.settings.startupTimeoutMs,
           requestTimeoutSeconds: state.settings.requestTimeoutSeconds,
+          retryAttempts: state.settings.retryAttempts,
+          retryDelayMs: state.settings.retryDelayMs,
         })
 
         return { index, node, result }
@@ -521,6 +528,43 @@ async function mapWithConcurrency(items, concurrency, mapper) {
 
   await Promise.all(workers)
   return results
+}
+
+/**
+ * @param {ProbeNode} node
+ * @param {{ targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number, retryAttempts: number, retryDelayMs: number }} options
+ */
+async function probeNodeWithRetry(node, options) {
+  const retryAttempts = Math.max(1, options.retryAttempts)
+  let lastResult
+
+  for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
+    lastResult = await probeNode(node, options)
+    if (lastResult.ok) {
+      if (attempt > 1) {
+        return {
+          ...lastResult,
+          error: undefined,
+          retryAttemptsUsed: attempt,
+        }
+      }
+
+      return {
+        ...lastResult,
+        retryAttemptsUsed: attempt,
+      }
+    }
+
+    if (attempt < retryAttempts) {
+      await sleep(options.retryDelayMs)
+    }
+  }
+
+  return {
+    ...lastResult,
+    error: lastResult?.error,
+    retryAttemptsUsed: retryAttempts,
+  }
 }
 
 function respondHtml(response, html) {

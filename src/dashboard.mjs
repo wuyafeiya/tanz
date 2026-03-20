@@ -730,6 +730,7 @@ export function renderDashboardHtml(options) {
                 <span class="badge"><span class="dot \${nodeStatusClass(node.status)}"></span>连续失败 \${node.consecutiveFailures} 次</span>
                 <span class="badge">最近耗时 \${node.lastDurationMs ?? '-'} ms</span>
                 <span class="badge">最后探测 \${formatDateTime(node.lastCheckedAt)}</span>
+                <span class="badge">失败即时重试 \${latestSnapshot?.settings?.retryAttempts ?? 3} 次</span>
               </div>
               <div class="node-editor">
                 <input type="text" data-node-server-input="\${node.id}" value="\${node.server}" spellcheck="false" />
