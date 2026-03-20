@@ -24,6 +24,7 @@ async function main() {
     requestTimeoutSeconds: args.requestTimeoutSeconds,
     telegramBotToken: args.telegramBotToken,
     telegramChatId: args.telegramChatId,
+    telegramProxy: args.telegramProxy,
   })
 
   const snapshot = await monitor.start()
@@ -33,6 +34,9 @@ async function main() {
   console.log(`失败阈值: ${snapshot.settings.failureThreshold} 次`)
   if (snapshot.settings.telegramEnabled) {
     console.log('Telegram 通知: 已启用')
+    if (snapshot.settings.telegramProxy) {
+      console.log(`Telegram 代理: ${snapshot.settings.telegramProxy}`)
+    }
   }
   console.log(`按 Ctrl+C 停止服务`)
 
@@ -67,6 +71,7 @@ function parseArgs(argv) {
     requestTimeoutSeconds: 10,
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
     telegramChatId: process.env.TELEGRAM_CHAT_ID,
+    telegramProxy: process.env.TELEGRAM_PROXY ?? 'http://127.0.0.1:7897',
   }
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -118,6 +123,10 @@ function parseArgs(argv) {
         options.telegramChatId = nextValue
         index += 1
         break
+      case '--telegram-proxy':
+        options.telegramProxy = nextValue
+        index += 1
+        break
       case '--help':
       case '-h':
         printHelp()
@@ -147,6 +156,7 @@ Options:
   --request-timeout <sec>    curl 请求超时
   --telegram-bot-token <v>   Telegram Bot Token
   --telegram-chat-id <v>     Telegram Chat ID
+  --telegram-proxy <url>     Telegram 专用代理，默认 http://127.0.0.1:7897
 `)
 }
 
