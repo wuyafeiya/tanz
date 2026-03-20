@@ -550,6 +550,7 @@ export function renderDashboardHtml(options) {
       const footerNote = document.getElementById('footer-note')
       const alertMeta = document.getElementById('alert-meta')
       const toast = document.getElementById('toast')
+      const connectionPanel = document.querySelector('.control-grid')
 
       /** @type {Map<string, boolean>} */
       const lastNodeAlertState = new Map()
@@ -608,6 +609,55 @@ export function renderDashboardHtml(options) {
         toast.classList.add('show')
         if (toastTimer) clearTimeout(toastTimer)
         toastTimer = setTimeout(() => toast.classList.remove('show'), 2600)
+      }
+
+      function ensureTelegramDebugBox() {
+        let box = document.getElementById('telegram-debug')
+        if (box) {
+          return box
+        }
+
+        box = document.createElement('div')
+        box.id = 'telegram-debug'
+        box.className = 'meta'
+        box.style.lineHeight = '1.7'
+        box.style.whiteSpace = 'pre-wrap'
+        box.style.wordBreak = 'break-word'
+        connectionPanel.appendChild(box)
+        return box
+      }
+
+      function renderTelegramDebug(telegram) {
+        const box = ensureTelegramDebugBox()
+        if (!telegram) {
+          box.textContent = ''
+          return
+        }
+
+        const lines = [
+          'TG 配置: ' + (telegram.enabled ? '已启用' : '未启用'),
+          'TG 代理: ' + (telegram.proxy || '未设置'),
+          'Bot: ' + (telegram.botTokenHint || '未提供'),
+          'Chat ID: ' + (telegram.chatIdHint || '未提供'),
+          '最近测试: ' + (telegram.lastTestAt ? formatDateTime(telegram.lastTestAt) : '未测试'),
+        ]
+
+        if (telegram.lastTestOk === true) {
+          lines.push('测试结果: 成功')
+        }
+        else if (telegram.lastTestOk === false) {
+          lines.push('测试结果: 失败')
+        }
+
+        if (telegram.lastTestError) {
+          lines.push('错误: ' + telegram.lastTestError)
+        }
+
+        if (telegram.lastResponseSnippet) {
+          lines.push('响应: ' + telegram.lastResponseSnippet)
+        }
+
+        box.textContent = lines.join('\n')
       }
 
       async function postJson(url, body) {
@@ -699,7 +749,7 @@ export function renderDashboardHtml(options) {
 
       function renderState(snapshot) {
         latestSnapshot = snapshot
-        const { summary, cycle, settings, nodes, alerts, server } = snapshot
+        const { summary, cycle, settings, nodes, alerts, server, telegram } = snapshot
         intervalInput.value = String(settings.intervalSeconds)
         countTotal.textContent = String(summary.total)
         countUp.textContent = String(summary.up)
@@ -709,6 +759,7 @@ export function renderDashboardHtml(options) {
           ? '当前正在执行一轮探测…'
           : '上次完成于 ' + formatDateTime(cycle.lastCompletedAt)
         footerNote.textContent = '监听 ' + server.origin + ' · 目标 ' + settings.targetUrl + ' · 启动超时 ' + settings.startupTimeoutMs + 'ms · 请求超时 ' + settings.requestTimeoutSeconds + 's · 并发 ' + settings.concurrency + ' · 告警阈值 ' + settings.failureThreshold + ' 次' + (settings.telegramEnabled ? ' · Telegram 已启用' : '')
+        renderTelegramDebug(telegram)
         renderNodes(nodes)
         renderAlerts(alerts)
       }
