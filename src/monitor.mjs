@@ -13,8 +13,8 @@ const DEFAULT_CONCURRENCY = 4
 const DEFAULT_FAILURE_THRESHOLD = 3
 const DEFAULT_RETRY_ATTEMPTS = 3
 const DEFAULT_RETRY_DELAY_MS = 1500
-const DEFAULT_RETRY_STARTUP_TIMEOUT_MS = 1500
-const DEFAULT_RETRY_REQUEST_TIMEOUT_SECONDS = 6
+const DEFAULT_ATTEMPT_STARTUP_TIMEOUT_MS = 2000
+const DEFAULT_ATTEMPT_REQUEST_TIMEOUT_SECONDS = 10
 const MAX_ALERTS = 30
 
 /**
@@ -46,12 +46,10 @@ export function createMonitor(nodes, options = {}) {
       concurrency,
       failureThreshold,
       targetUrl: options.targetUrl,
-      startupTimeoutMs: options.startupTimeoutMs,
-      requestTimeoutSeconds: options.requestTimeoutSeconds,
+      startupTimeoutMs: DEFAULT_ATTEMPT_STARTUP_TIMEOUT_MS,
+      requestTimeoutSeconds: DEFAULT_ATTEMPT_REQUEST_TIMEOUT_SECONDS,
       retryAttempts: DEFAULT_RETRY_ATTEMPTS,
       retryDelayMs: DEFAULT_RETRY_DELAY_MS,
-      retryStartupTimeoutMs: DEFAULT_RETRY_STARTUP_TIMEOUT_MS,
-      retryRequestTimeoutSeconds: DEFAULT_RETRY_REQUEST_TIMEOUT_SECONDS,
       telegramEnabled: telegram.enabled,
       telegramProxy: telegram.proxy,
       telegramDebug: telegram.debug,
@@ -305,9 +303,8 @@ export function createMonitor(nodes, options = {}) {
 
     isRunning = true
     clearTimeout(cycleTimer)
-    const cycleStartedAtMs = Date.now()
     state.cycle.running = true
-    state.cycle.lastStartedAt = new Date(cycleStartedAtMs).toISOString()
+    state.cycle.lastStartedAt = new Date().toISOString()
     state.cycle.nextRunAt = undefined
     markNodesRunning()
     publish()
@@ -321,9 +318,6 @@ export function createMonitor(nodes, options = {}) {
           requestTimeoutSeconds: state.settings.requestTimeoutSeconds,
           retryAttempts: state.settings.retryAttempts,
           retryDelayMs: state.settings.retryDelayMs,
-          retryStartupTimeoutMs: state.settings.retryStartupTimeoutMs,
-          retryRequestTimeoutSeconds: state.settings.retryRequestTimeoutSeconds,
-          preferFastRetry: currentState.status === 'down' || currentState.consecutiveFailures > 0 || currentState.alertActive,
         })
 
         return { index, node, result }
@@ -393,7 +387,7 @@ export function createMonitor(nodes, options = {}) {
       isRunning = false
       state.cycle.running = false
       state.cycle.lastCompletedAt = new Date().toISOString()
-      planNextRunFrom(cycleStartedAtMs, intervalSeconds * 1000)
+      planNextRun(intervalSeconds * 1000)
       publish()
     }
   }
@@ -407,16 +401,12 @@ export function createMonitor(nodes, options = {}) {
   }
 
   function planNextRun(delayMs) {
-    planNextRunFrom(Date.now(), delayMs)
-  }
-
-  function planNextRunFrom(baseStartedAtMs, delayMs) {
     clearTimeout(cycleTimer)
-    const nextRunAtMs = Math.max(Date.now(), baseStartedAtMs + delayMs)
+    const nextRunAtMs = Date.now() + delayMs
     state.cycle.nextRunAt = new Date(nextRunAtMs).toISOString()
     cycleTimer = setTimeout(() => {
       void runCycle()
-    }, Math.max(0, nextRunAtMs - Date.now()))
+    }, delayMs)
   }
 
   function pushAlert(alert) {
@@ -546,7 +536,7 @@ async function mapWithConcurrency(items, concurrency, mapper) {
 
 /**
  * @param {ProbeNode} node
- * @param {{ targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number, retryAttempts: number, retryDelayMs: number, retryStartupTimeoutMs: number, retryRequestTimeoutSeconds: number, preferFastRetry: boolean }} options
+ * @param {{ targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number, retryAttempts: number, retryDelayMs: number }} options
  */
 async function probeNodeWithRetry(node, options) {
   const retryAttempts = Math.max(1, options.retryAttempts)
@@ -554,20 +544,11 @@ async function probeNodeWithRetry(node, options) {
   let lastResult
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
-    const useFastTimeout = options.preferFastRetry || attempt > 1
-    const perAttemptOptions = useFastTimeout
-      ? {
-          targetUrl: options.targetUrl,
-          startupTimeoutMs: options.retryStartupTimeoutMs,
-          requestTimeoutSeconds: options.retryRequestTimeoutSeconds,
-        }
-      : {
-          targetUrl: options.targetUrl,
-          startupTimeoutMs: options.startupTimeoutMs,
-          requestTimeoutSeconds: options.requestTimeoutSeconds,
-        }
-
-    lastResult = await probeNode(node, perAttemptOptions)
+    lastResult = await probeNode(node, {
+      targetUrl: options.targetUrl,
+      startupTimeoutMs: options.startupTimeoutMs,
+      requestTimeoutSeconds: options.requestTimeoutSeconds,
+    })
     if (lastResult.ok) {
       if (attempt > 1) {
         return {

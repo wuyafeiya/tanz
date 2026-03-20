@@ -788,7 +788,7 @@ export function renderDashboardHtml(options) {
         cycleMeta.textContent = cycle.running
           ? '当前正在执行一轮探测…'
           : '上次完成于 ' + formatDateTime(cycle.lastCompletedAt)
-        footerNote.textContent = '监听 ' + server.origin + ' · 目标 ' + settings.targetUrl + ' · 启动超时 ' + settings.startupTimeoutMs + 'ms · 请求超时 ' + settings.requestTimeoutSeconds + 's · 快速重试超时 ' + settings.retryRequestTimeoutSeconds + 's · 并发 ' + settings.concurrency + ' · 告警阈值 ' + settings.failureThreshold + ' 次' + (settings.telegramEnabled ? ' · Telegram 已启用' : '')
+        footerNote.textContent = '监听 ' + server.origin + ' · 目标 ' + settings.targetUrl + ' · 单次启动超时 ' + settings.startupTimeoutMs + 'ms · 单次请求超时 ' + settings.requestTimeoutSeconds + 's · 并发 ' + settings.concurrency + ' · 告警阈值 ' + settings.failureThreshold + ' 次' + (settings.telegramEnabled ? ' · Telegram 已启用' : '')
         renderTelegramDebug(telegram)
         renderNodes(nodes)
         renderAlerts(alerts)
