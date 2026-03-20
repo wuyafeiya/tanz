@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "probe": "node src/cli.mjs"
+    "probe": "node src/cli.mjs",
+    "monitor": "node src/monitor-cli.mjs"
   }
 }
