@@ -44,6 +44,7 @@ export function createMonitor(nodes, options = {}) {
       requestTimeoutSeconds: options.requestTimeoutSeconds,
       telegramEnabled: telegram.enabled,
       telegramProxy: telegram.proxy,
+      telegramDebug: telegram.debug,
     },
     cycle: {
       running: false,
@@ -72,6 +73,16 @@ export function createMonitor(nodes, options = {}) {
       lastAlertAt: undefined,
     })),
     alerts: [],
+    telegram: {
+      enabled: telegram.enabled,
+      proxy: telegram.proxy,
+      botTokenHint: telegram.botTokenHint,
+      chatIdHint: telegram.chatIdHint,
+      lastTestAt: undefined,
+      lastTestOk: undefined,
+      lastTestError: undefined,
+      lastResponseSnippet: undefined,
+    },
     server: {
       host,
       port,
@@ -140,8 +151,13 @@ export function createMonitor(nodes, options = {}) {
           'Telegram 测试消息',
           `来自 ${host}:${state.server.port} 的监控测试消息。`,
         )
-        await sendTelegramAlert(telegram, alert)
-        respondJson(response, 200, { ok: true })
+        const result = await sendTelegramAlert(telegram, alert)
+        state.telegram.lastTestAt = new Date().toISOString()
+        state.telegram.lastTestOk = true
+        state.telegram.lastTestError = undefined
+        state.telegram.lastResponseSnippet = result.responseSnippet
+        publish()
+        respondJson(response, 200, { ok: true, responseSnippet: result.responseSnippet })
         return
       }
 
@@ -149,6 +165,15 @@ export function createMonitor(nodes, options = {}) {
     }
     catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      if (pathname === '/api/telegram-test') {
+        state.telegram.lastTestAt = new Date().toISOString()
+        state.telegram.lastTestOk = false
+        state.telegram.lastTestError = message
+        if (error && typeof error === 'object' && 'responseSnippet' in error) {
+          state.telegram.lastResponseSnippet = String(error.responseSnippet)
+        }
+        publish()
+      }
       respondJson(response, 400, { error: message })
     }
   })
@@ -213,6 +238,7 @@ export function createMonitor(nodes, options = {}) {
       summary: { ...state.summary },
       nodes: state.nodes.map(node => ({ ...node })),
       alerts: state.alerts.map(alert => ({ ...alert })),
+      telegram: { ...state.telegram },
       server: { ...state.server },
     }
   }
@@ -365,10 +391,10 @@ function createAlert(level, title, message) {
 
 async function sendTelegramAlert(telegram, alert) {
   if (!telegram.enabled) {
-    return
+    return { responseSnippet: '' }
   }
 
-  await telegram.sendMessage(`[${alert.level.toUpperCase()}] ${alert.title}\n${alert.message}\n${alert.at}`)
+  return await telegram.sendMessage(`[${alert.level.toUpperCase()}] ${alert.title}\n${alert.message}\n${alert.at}`)
 }
 
 function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7897') {
@@ -376,6 +402,9 @@ function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7
     return {
       enabled: false,
       proxy: undefined,
+      debug: false,
+      botTokenHint: undefined,
+      chatIdHint: undefined,
       async sendMessage() {},
     }
   }
@@ -383,6 +412,9 @@ function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7
   return {
     enabled: true,
     proxy: proxyUrl,
+    debug: true,
+    botTokenHint: maskToken(botToken),
+    chatIdHint: maskChatId(chatId),
     async sendMessage(text) {
       const payload = JSON.stringify({
         chat_id: chatId,
@@ -420,7 +452,9 @@ function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7
 
       const [code] = /** @type {[number | null, NodeJS.Signals | null]} */ (await once(child, 'exit'))
       if (code !== 0) {
-        throw new Error(stderr.trim() || `curl exit code ${code}`)
+        const error = /** @type {Error & { responseSnippet?: string }} */ (new Error(stderr.trim() || `curl exit code ${code}`))
+        error.responseSnippet = stdout.trim().slice(0, 500)
+        throw error
       }
 
       let response
@@ -432,7 +466,13 @@ function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7
       }
 
       if (!response.ok) {
-        throw new Error(response.description ?? 'unknown telegram error')
+        const error = /** @type {Error & { responseSnippet?: string }} */ (new Error(response.description ?? 'unknown telegram error'))
+        error.responseSnippet = stdout.trim().slice(0, 500)
+        throw error
+      }
+
+      return {
+        responseSnippet: stdout.trim().slice(0, 500),
       }
     },
   }
@@ -495,4 +535,19 @@ function normalizePositiveInt(value, label) {
     throw new Error(`${label}必须是正整数`)
   }
   return number
+}
+
+function maskToken(value) {
+  if (value.length <= 8) {
+    return '***'
+  }
+  return `${value.slice(0, 6)}...${value.slice(-4)}`
+}
+
+function maskChatId(value) {
+  const text = String(value)
+  if (text.length <= 4) {
+    return text
+  }
+  return `***${text.slice(-4)}`
 }
