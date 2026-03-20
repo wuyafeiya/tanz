@@ -13,6 +13,8 @@ const DEFAULT_CONCURRENCY = 4
 const DEFAULT_FAILURE_THRESHOLD = 3
 const DEFAULT_RETRY_ATTEMPTS = 3
 const DEFAULT_RETRY_DELAY_MS = 1500
+const DEFAULT_RETRY_STARTUP_TIMEOUT_MS = 1500
+const DEFAULT_RETRY_REQUEST_TIMEOUT_SECONDS = 6
 const MAX_ALERTS = 30
 
 /**
@@ -48,6 +50,8 @@ export function createMonitor(nodes, options = {}) {
       requestTimeoutSeconds: options.requestTimeoutSeconds,
       retryAttempts: DEFAULT_RETRY_ATTEMPTS,
       retryDelayMs: DEFAULT_RETRY_DELAY_MS,
+      retryStartupTimeoutMs: DEFAULT_RETRY_STARTUP_TIMEOUT_MS,
+      retryRequestTimeoutSeconds: DEFAULT_RETRY_REQUEST_TIMEOUT_SECONDS,
       telegramEnabled: telegram.enabled,
       telegramProxy: telegram.proxy,
       telegramDebug: telegram.debug,
@@ -315,6 +319,8 @@ export function createMonitor(nodes, options = {}) {
           requestTimeoutSeconds: state.settings.requestTimeoutSeconds,
           retryAttempts: state.settings.retryAttempts,
           retryDelayMs: state.settings.retryDelayMs,
+          retryStartupTimeoutMs: state.settings.retryStartupTimeoutMs,
+          retryRequestTimeoutSeconds: state.settings.retryRequestTimeoutSeconds,
         })
 
         return { index, node, result }
@@ -532,14 +538,26 @@ async function mapWithConcurrency(items, concurrency, mapper) {
 
 /**
  * @param {ProbeNode} node
- * @param {{ targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number, retryAttempts: number, retryDelayMs: number }} options
+ * @param {{ targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number, retryAttempts: number, retryDelayMs: number, retryStartupTimeoutMs: number, retryRequestTimeoutSeconds: number }} options
  */
 async function probeNodeWithRetry(node, options) {
   const retryAttempts = Math.max(1, options.retryAttempts)
   let lastResult
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
-    lastResult = await probeNode(node, options)
+    const perAttemptOptions = attempt === 1
+      ? {
+          targetUrl: options.targetUrl,
+          startupTimeoutMs: options.startupTimeoutMs,
+          requestTimeoutSeconds: options.requestTimeoutSeconds,
+        }
+      : {
+          targetUrl: options.targetUrl,
+          startupTimeoutMs: options.retryStartupTimeoutMs,
+          requestTimeoutSeconds: options.retryRequestTimeoutSeconds,
+        }
+
+    lastResult = await probeNode(node, perAttemptOptions)
     if (lastResult.ok) {
       if (attempt > 1) {
         return {
