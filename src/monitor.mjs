@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
+import { updateNodeServer } from './config.mjs'
 import { renderDashboardHtml } from './dashboard.mjs'
 import { probeNode } from './probe.mjs'
 
@@ -17,7 +18,7 @@ const MAX_ALERTS = 30
 
 /**
  * @param {ProbeNode[]} nodes
- * @param {{ host?: string, port?: number, intervalSeconds?: number, concurrency?: number, failureThreshold?: number, targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number, telegramBotToken?: string, telegramChatId?: string, telegramProxy?: string }} options
+ * @param {{ configFile?: string, host?: string, port?: number, intervalSeconds?: number, concurrency?: number, failureThreshold?: number, targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number, telegramBotToken?: string, telegramChatId?: string, telegramProxy?: string }} options
  */
 export function createMonitor(nodes, options = {}) {
   const host = options.host ?? DEFAULT_HOST
@@ -158,6 +159,29 @@ export function createMonitor(nodes, options = {}) {
         state.telegram.lastResponseSnippet = result.responseSnippet
         publish()
         respondJson(response, 200, { ok: true, responseSnippet: result.responseSnippet })
+        return
+      }
+
+      if (method === 'POST' && pathname === '/api/node-server') {
+        if (!options.configFile) {
+          respondJson(response, 400, { error: '当前监控未绑定配置文件' })
+          return
+        }
+
+        const body = await readJsonBody(request)
+        const nodeId = typeof body.nodeId === 'string' ? body.nodeId : ''
+        const server = typeof body.server === 'string' ? body.server : ''
+        const updated = await updateNodeServer(options.configFile, nodeId, server)
+        const index = nodes.findIndex(node => node.id === updated.id)
+
+        if (index < 0) {
+          throw new Error(`未找到节点: ${updated.id}`)
+        }
+
+        nodes[index].server = updated.server
+        state.nodes[index].server = updated.server
+        publish()
+        respondJson(response, 200, { ok: true, node: { ...state.nodes[index] } })
         return
       }
 
