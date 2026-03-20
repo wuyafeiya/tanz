@@ -491,6 +491,7 @@ export function renderDashboardHtml(options) {
             <div class="button-row">
               <button id="save-button" class="primary">保存频率</button>
               <button id="probe-button" class="secondary">立即探测</button>
+              <button id="telegram-test-button" class="secondary">测试 TG</button>
               <button id="notify-button" class="secondary">启用通知</button>
             </div>
             <div class="meta" id="connection-meta">正在连接监控服务…</div>
@@ -534,6 +535,7 @@ export function renderDashboardHtml(options) {
       const intervalInput = document.getElementById('interval-input')
       const saveButton = document.getElementById('save-button')
       const probeButton = document.getElementById('probe-button')
+      const telegramTestButton = document.getElementById('telegram-test-button')
       const notifyButton = document.getElementById('notify-button')
       const connectionMeta = document.getElementById('connection-meta')
       const cycleMeta = document.getElementById('cycle-meta')
@@ -552,6 +554,8 @@ export function renderDashboardHtml(options) {
       /** @type {Map<string, boolean>} */
       const lastNodeAlertState = new Map()
       let toastTimer = null
+      let latestSnapshot = null
+      let nextRunTicker = null
 
       function formatDateTime(value) {
         if (!value) return '未开始'
@@ -573,6 +577,30 @@ export function renderDashboardHtml(options) {
         const diff = Math.max(0, Math.round((date.getTime() - Date.now()) / 1000))
         if (diff <= 1) return '即将执行'
         return diff + ' 秒后'
+      }
+
+      function renderNextRun() {
+        if (!latestSnapshot) {
+          nextRun.textContent = '-'
+          return
+        }
+
+        if (latestSnapshot.cycle.running) {
+          nextRun.textContent = '进行中'
+          return
+        }
+
+        nextRun.textContent = formatRelative(latestSnapshot.cycle.nextRunAt)
+      }
+
+      function ensureNextRunTicker() {
+        if (nextRunTicker) {
+          return
+        }
+
+        nextRunTicker = setInterval(() => {
+          renderNextRun()
+        }, 1000)
       }
 
       function showToast(message) {
@@ -670,12 +698,13 @@ export function renderDashboardHtml(options) {
       }
 
       function renderState(snapshot) {
+        latestSnapshot = snapshot
         const { summary, cycle, settings, nodes, alerts, server } = snapshot
         intervalInput.value = String(settings.intervalSeconds)
         countTotal.textContent = String(summary.total)
         countUp.textContent = String(summary.up)
         countDown.textContent = String(summary.down)
-        nextRun.textContent = cycle.running ? '进行中' : formatRelative(cycle.nextRunAt)
+        renderNextRun()
         cycleMeta.textContent = cycle.running
           ? '当前正在执行一轮探测…'
           : '上次完成于 ' + formatDateTime(cycle.lastCompletedAt)
@@ -753,6 +782,20 @@ export function renderDashboardHtml(options) {
         }
       })
 
+      telegramTestButton.addEventListener('click', async () => {
+        telegramTestButton.disabled = true
+        try {
+          await postJson('/api/telegram-test', {})
+          showToast('测试消息已发送')
+        }
+        catch (error) {
+          showToast(error instanceof Error ? error.message : String(error))
+        }
+        finally {
+          telegramTestButton.disabled = false
+        }
+      })
+
       notifyButton.addEventListener('click', async () => {
         if (!('Notification' in window)) {
           showToast('当前浏览器不支持桌面通知')
@@ -771,6 +814,7 @@ export function renderDashboardHtml(options) {
       hydrate().catch(error => {
         connectionMeta.textContent = error instanceof Error ? error.message : String(error)
       }).finally(() => {
+        ensureNextRunTicker()
         connectEvents()
       })
     </script>
