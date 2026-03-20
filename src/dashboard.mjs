@@ -302,6 +302,23 @@ export function renderDashboardHtml(options) {
         gap: 8px;
       }
 
+      .node-editor {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      .node-editor input {
+        flex: 1 1 220px;
+        min-width: 0;
+        padding: 12px 14px;
+      }
+
+      .node-editor button {
+        padding: 12px 16px;
+      }
+
       .badge {
         display: inline-flex;
         align-items: center;
@@ -714,6 +731,10 @@ export function renderDashboardHtml(options) {
                 <span class="badge">最近耗时 \${node.lastDurationMs ?? '-'} ms</span>
                 <span class="badge">最后探测 \${formatDateTime(node.lastCheckedAt)}</span>
               </div>
+              <div class="node-editor">
+                <input type="text" data-node-server-input="\${node.id}" value="\${node.server}" spellcheck="false" />
+                <button class="secondary" data-node-server-save="\${node.id}">保存服务器地址</button>
+              </div>
             </div>
             <div class="state">
               <div class="pill \${nodeStatusClass(node.status)}">\${nodeStatusLabel(node.status)}</div>
@@ -830,6 +851,38 @@ export function renderDashboardHtml(options) {
         }
         finally {
           probeButton.disabled = false
+        }
+      })
+
+      nodeList.addEventListener('click', async event => {
+        const button = event.target.closest('[data-node-server-save]')
+        if (!button) {
+          return
+        }
+
+        const nodeId = button.getAttribute('data-node-server-save')
+        const input = nodeList.querySelector('[data-node-server-input="' + nodeId + '"]')
+        if (!nodeId || !input) {
+          showToast('未找到节点输入框')
+          return
+        }
+
+        const server = input.value.trim()
+        if (!server) {
+          showToast('服务器地址不能为空')
+          return
+        }
+
+        button.disabled = true
+        try {
+          await postJson('/api/node-server', { nodeId, server })
+          showToast('服务器地址已保存')
+        }
+        catch (error) {
+          showToast(error instanceof Error ? error.message : String(error))
+        }
+        finally {
+          button.disabled = false
         }
       })
 

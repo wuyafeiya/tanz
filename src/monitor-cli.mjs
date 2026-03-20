@@ -14,6 +14,7 @@ async function main() {
   }
 
   const monitor = createMonitor(nodes, {
+    configFile,
     host: args.host,
     port: args.port,
     intervalSeconds: args.intervalSeconds,
