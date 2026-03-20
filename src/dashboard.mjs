@@ -705,6 +705,14 @@ export function renderDashboardHtml(options) {
         return status === 'up' || status === 'down' ? status : ''
       }
 
+      function formatDurationSeconds(durationMs) {
+        if (typeof durationMs !== 'number' || !Number.isFinite(durationMs)) {
+          return '-'
+        }
+
+        return (durationMs / 1000).toFixed(durationMs >= 10000 ? 0 : 1)
+      }
+
       function renderNodes(nodes) {
         nodeList.innerHTML = ''
         nodeEmpty.hidden = nodes.length > 0
@@ -728,7 +736,7 @@ export function renderDashboardHtml(options) {
               <div class="node-sub">\${errorText}</div>
               <div class="badges">
                 <span class="badge"><span class="dot \${nodeStatusClass(node.status)}"></span>连续失败 \${node.consecutiveFailures} 次</span>
-                <span class="badge">最近耗时 \${node.lastDurationMs ?? '-'} ms</span>
+                <span class="badge">本轮耗时 \${formatDurationSeconds(node.lastDurationMs)} 秒</span>
                 <span class="badge">最后探测 \${formatDateTime(node.lastCheckedAt)}</span>
                 <span class="badge">失败即时重试 \${latestSnapshot?.settings?.retryAttempts ?? 3} 次</span>
               </div>

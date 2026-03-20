@@ -542,6 +542,7 @@ async function mapWithConcurrency(items, concurrency, mapper) {
  */
 async function probeNodeWithRetry(node, options) {
   const retryAttempts = Math.max(1, options.retryAttempts)
+  const startedAt = Date.now()
   let lastResult
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
@@ -562,6 +563,7 @@ async function probeNodeWithRetry(node, options) {
       if (attempt > 1) {
         return {
           ...lastResult,
+          durationMs: Date.now() - startedAt,
           error: undefined,
           retryAttemptsUsed: attempt,
         }
@@ -569,6 +571,7 @@ async function probeNodeWithRetry(node, options) {
 
       return {
         ...lastResult,
+        durationMs: Date.now() - startedAt,
         retryAttemptsUsed: attempt,
       }
     }
@@ -580,6 +583,7 @@ async function probeNodeWithRetry(node, options) {
 
   return {
     ...lastResult,
+    durationMs: Date.now() - startedAt,
     error: lastResult?.error,
     retryAttemptsUsed: retryAttempts,
   }
