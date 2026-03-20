@@ -698,6 +698,7 @@ export function renderDashboardHtml(options) {
           case 'up': return 'UP'
           case 'down': return 'DOWN'
           case 'running': return 'RUNNING'
+          case 'paused': return 'PAUSED'
           default: return 'IDLE'
         }
       }
@@ -746,7 +747,10 @@ export function renderDashboardHtml(options) {
           }
 
           if (label) {
-            if (node.status === 'running' && node.currentAttempt > 0) {
+            if (node.paused) {
+              label.textContent = '已暂停轮询'
+            }
+            else if (node.status === 'running' && node.currentAttempt > 0) {
               label.textContent = '第 ' + node.currentAttempt + '/' + node.currentAttemptMax + ' 次尝试'
             }
             else {
@@ -769,6 +773,9 @@ export function renderDashboardHtml(options) {
             : node.lastCheckedAt
               ? '最近一次探测正常'
               : '等待首轮探测'
+          const stateText = node.paused
+            ? (node.pauseReason || '已暂停轮询')
+            : '最近恢复：' + formatDateTime(node.lastOkAt)
 
           item.innerHTML = \`
             <div class="node-main">
@@ -781,7 +788,7 @@ export function renderDashboardHtml(options) {
                 <span class="badge"><span class="dot \${nodeStatusClass(node.status)}"></span>连续失败 \${node.consecutiveFailures} 次</span>
                 <span class="badge">\${node.status === 'running' && node.attemptStartedAt ? '当前耗时' : '本轮耗时'} <span data-node-live-clock="\${node.id}">\${node.status === 'running' && node.attemptStartedAt ? formatLiveSeconds(node.attemptStartedAt) + 's' : formatDurationSeconds(node.lastDurationMs) + ' 秒'}</span></span>
                 <span class="badge">最后探测 \${formatDateTime(node.lastCheckedAt)}</span>
-                <span class="badge" data-node-attempt-label="\${node.id}">\${node.status === 'running' && node.currentAttempt > 0 ? '第 ' + node.currentAttempt + '/' + node.currentAttemptMax + ' 次尝试' : '失败即时重试 ' + (latestSnapshot?.settings?.retryAttempts ?? 3) + ' 次'}</span>
+                <span class="badge" data-node-attempt-label="\${node.id}">\${node.paused ? '已暂停轮询' : node.status === 'running' && node.currentAttempt > 0 ? '第 ' + node.currentAttempt + '/' + node.currentAttemptMax + ' 次尝试' : '失败即时重试 ' + (latestSnapshot?.settings?.retryAttempts ?? 3) + ' 次'}</span>
               </div>
               <div class="node-editor">
                 <input type="text" data-node-server-input="\${node.id}" value="\${node.server}" spellcheck="false" />
@@ -790,7 +797,7 @@ export function renderDashboardHtml(options) {
             </div>
             <div class="state">
               <div class="pill \${nodeStatusClass(node.status)}">\${nodeStatusLabel(node.status)}</div>
-              <small>最近恢复：\${formatDateTime(node.lastOkAt)}</small>
+              <small>\${stateText}</small>
             </div>
           \`
           nodeList.appendChild(item)
