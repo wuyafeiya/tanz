@@ -657,7 +657,7 @@ export function renderDashboardHtml(options) {
           lines.push('响应: ' + telegram.lastResponseSnippet)
         }
 
-        box.textContent = lines.join('\n')
+        box.textContent = lines.join('\\n')
       }
 
       async function postJson(url, body) {
