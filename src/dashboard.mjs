@@ -618,6 +618,7 @@ export function renderDashboardHtml(options) {
 
         nextRunTicker = setInterval(() => {
           renderNextRun()
+          refreshNodeLiveClocks()
         }, 1000)
       }
 
@@ -713,6 +714,48 @@ export function renderDashboardHtml(options) {
         return (durationMs / 1000).toFixed(durationMs >= 10000 ? 0 : 1)
       }
 
+      function formatLiveSeconds(value) {
+        if (!value) {
+          return '-'
+        }
+
+        const startedAt = new Date(value)
+        if (Number.isNaN(startedAt.getTime())) {
+          return '-'
+        }
+
+        return String(Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 1000)))
+      }
+
+      function refreshNodeLiveClocks() {
+        if (!latestSnapshot?.nodes) {
+          return
+        }
+
+        for (const node of latestSnapshot.nodes) {
+          const clock = nodeList.querySelector('[data-node-live-clock="' + node.id + '"]')
+          const label = nodeList.querySelector('[data-node-attempt-label="' + node.id + '"]')
+
+          if (clock) {
+            if (node.status === 'running' && node.attemptStartedAt) {
+              clock.textContent = formatLiveSeconds(node.attemptStartedAt) + 's'
+            }
+            else {
+              clock.textContent = formatDurationSeconds(node.lastDurationMs) + ' 秒'
+            }
+          }
+
+          if (label) {
+            if (node.status === 'running' && node.currentAttempt > 0) {
+              label.textContent = '第 ' + node.currentAttempt + '/' + node.currentAttemptMax + ' 次尝试'
+            }
+            else {
+              label.textContent = '失败即时重试 ' + (latestSnapshot?.settings?.retryAttempts ?? 3) + ' 次'
+            }
+          }
+        }
+      }
+
       function renderNodes(nodes) {
         nodeList.innerHTML = ''
         nodeEmpty.hidden = nodes.length > 0
@@ -736,9 +779,9 @@ export function renderDashboardHtml(options) {
               <div class="node-sub">\${errorText}</div>
               <div class="badges">
                 <span class="badge"><span class="dot \${nodeStatusClass(node.status)}"></span>连续失败 \${node.consecutiveFailures} 次</span>
-                <span class="badge">本轮耗时 \${formatDurationSeconds(node.lastDurationMs)} 秒</span>
+                <span class="badge">\${node.status === 'running' && node.attemptStartedAt ? '当前耗时' : '本轮耗时'} <span data-node-live-clock="\${node.id}">\${node.status === 'running' && node.attemptStartedAt ? formatLiveSeconds(node.attemptStartedAt) + 's' : formatDurationSeconds(node.lastDurationMs) + ' 秒'}</span></span>
                 <span class="badge">最后探测 \${formatDateTime(node.lastCheckedAt)}</span>
-                <span class="badge">失败即时重试 \${latestSnapshot?.settings?.retryAttempts ?? 3} 次</span>
+                <span class="badge" data-node-attempt-label="\${node.id}">\${node.status === 'running' && node.currentAttempt > 0 ? '第 ' + node.currentAttempt + '/' + node.currentAttemptMax + ' 次尝试' : '失败即时重试 ' + (latestSnapshot?.settings?.retryAttempts ?? 3) + ' 次'}</span>
               </div>
               <div class="node-editor">
                 <input type="text" data-node-server-input="\${node.id}" value="\${node.server}" spellcheck="false" />
@@ -792,6 +835,7 @@ export function renderDashboardHtml(options) {
         renderTelegramDebug(telegram)
         renderNodes(nodes)
         renderAlerts(alerts)
+        refreshNodeLiveClocks()
       }
 
       function notifyNodeDown(node) {

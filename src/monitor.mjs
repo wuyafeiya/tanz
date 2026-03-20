@@ -12,7 +12,7 @@ const DEFAULT_INTERVAL_SECONDS = 30
 const DEFAULT_CONCURRENCY = 4
 const DEFAULT_FAILURE_THRESHOLD = 3
 const DEFAULT_RETRY_ATTEMPTS = 3
-const DEFAULT_RETRY_DELAY_MS = 1500
+const DEFAULT_RETRY_DELAY_MS = 800
 const DEFAULT_ATTEMPT_STARTUP_TIMEOUT_MS = 2000
 const DEFAULT_ATTEMPT_REQUEST_TIMEOUT_SECONDS = 10
 const MAX_ALERTS = 30
@@ -79,6 +79,9 @@ export function createMonitor(nodes, options = {}) {
       lastDurationMs: undefined,
       lastError: undefined,
       lastAlertAt: undefined,
+      currentAttempt: 0,
+      currentAttemptMax: DEFAULT_RETRY_ATTEMPTS,
+      attemptStartedAt: undefined,
     })),
     alerts: [],
     telegram: {
@@ -311,13 +314,25 @@ export function createMonitor(nodes, options = {}) {
 
     try {
       const results = await mapWithConcurrency(nodes, concurrency, async (node, index) => {
-        const currentState = state.nodes[index]
         const result = await probeNodeWithRetry(node, {
           targetUrl: state.settings.targetUrl,
           startupTimeoutMs: state.settings.startupTimeoutMs,
           requestTimeoutSeconds: state.settings.requestTimeoutSeconds,
           retryAttempts: state.settings.retryAttempts,
           retryDelayMs: state.settings.retryDelayMs,
+          onAttemptStart(attempt, maxAttempts) {
+            const current = state.nodes[index]
+            current.status = 'running'
+            current.currentAttempt = attempt
+            current.currentAttemptMax = maxAttempts
+            current.attemptStartedAt = new Date().toISOString()
+            publish()
+          },
+          onAttemptFinish() {
+            const current = state.nodes[index]
+            current.attemptStartedAt = undefined
+            publish()
+          },
         })
 
         return { index, node, result }
@@ -331,6 +346,9 @@ export function createMonitor(nodes, options = {}) {
         const previousStatus = current.status
         current.lastCheckedAt = result.checkedAt
         current.lastDurationMs = result.durationMs
+        current.currentAttempt = 0
+        current.currentAttemptMax = state.settings.retryAttempts
+        current.attemptStartedAt = undefined
 
         if (result.ok) {
           current.status = 'up'
@@ -536,7 +554,7 @@ async function mapWithConcurrency(items, concurrency, mapper) {
 
 /**
  * @param {ProbeNode} node
- * @param {{ targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number, retryAttempts: number, retryDelayMs: number }} options
+ * @param {{ targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number, retryAttempts: number, retryDelayMs: number, onAttemptStart?: (attempt: number, maxAttempts: number) => void, onAttemptFinish?: () => void }} options
  */
 async function probeNodeWithRetry(node, options) {
   const retryAttempts = Math.max(1, options.retryAttempts)
@@ -544,11 +562,18 @@ async function probeNodeWithRetry(node, options) {
   let lastResult
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
-    lastResult = await probeNode(node, {
-      targetUrl: options.targetUrl,
-      startupTimeoutMs: options.startupTimeoutMs,
-      requestTimeoutSeconds: options.requestTimeoutSeconds,
-    })
+    options.onAttemptStart?.(attempt, retryAttempts)
+    try {
+      lastResult = await probeNode(node, {
+        targetUrl: options.targetUrl,
+        startupTimeoutMs: options.startupTimeoutMs,
+        requestTimeoutSeconds: options.requestTimeoutSeconds,
+      })
+    }
+    finally {
+      options.onAttemptFinish?.()
+    }
+
     if (lastResult.ok) {
       if (attempt > 1) {
         return {
