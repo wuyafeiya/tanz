@@ -37,6 +37,32 @@ cp nodes.example.json nodes.json
 pnpm probe --config ./nodes.json
 ```
 
+启动持续监控和本地仪表盘:
+
+```bash
+pnpm monitor --config ./nodes.json --interval 30 --port 3456
+```
+
+启用并发探测、失败阈值去抖和 Telegram 通知:
+
+```bash
+pnpm monitor --config ./nodes.json --interval 30 --concurrency 8 --failure-threshold 3 --telegram-bot-token <token> --telegram-chat-id <chatId>
+```
+
+也可以通过环境变量提供 Telegram 配置:
+
+```bash
+export TELEGRAM_BOT_TOKEN=xxx
+export TELEGRAM_CHAT_ID=123456789
+pnpm monitor --config ./nodes.json
+```
+
+启动后在浏览器打开:
+
+```text
+http://127.0.0.1:3456
+```
+
 也可以指定目标地址与超时:
 
 ```bash
@@ -49,6 +75,17 @@ pnpm probe --config ./nodes.json --target https://www.gstatic.com/generate_204 -
 HK SS 01    UP
 JP SSR 01   DOWN    curl: (28) Connection timed out after 10002 milliseconds
 ```
+
+监控模式能力:
+
+- 持续轮询节点状态
+- 并发探测，加快大批量节点轮询速度
+- 本地实时仪表盘
+- 页面内可修改轮询间隔
+- 手动触发立即探测
+- 节点掉线时可使用浏览器通知提醒
+- 连续失败达到阈值后再告警，避免短暂抖动误报
+- 支持 Telegram 掉线与恢复通知
 
 ## 配置格式
 
@@ -86,6 +123,6 @@ JP SSR 01   DOWN    curl: (28) Connection timed out after 10002 milliseconds
 
 ## 限制
 
-- 当前按顺序逐个检测，没有做并发
 - 当前不支持从订阅链接自动导入
 - `ssr-local` 参数可能因你使用的实现不同而存在差异，必要时需要调整 [src/probe.mjs](./src/probe.mjs) 里的参数映射
+- 浏览器通知依赖页面授予通知权限

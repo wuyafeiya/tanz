@@ -18,6 +18,7 @@ const DEFAULT_REQUEST_TIMEOUT_SECONDS = 10
  * @property {string} name
  * @property {boolean} ok
  * @property {string} checkedAt
+ * @property {number} durationMs
  * @property {string=} error
  */
 
@@ -31,6 +32,7 @@ export async function probeNode(node, options = {}) {
   const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS
   const requestTimeoutSeconds = options.requestTimeoutSeconds ?? DEFAULT_REQUEST_TIMEOUT_SECONDS
   const localPort = await getFreePort()
+  const startedAt = Date.now()
 
   /** @type {import('node:child_process').ChildProcess | undefined} */
   let child
@@ -45,6 +47,7 @@ export async function probeNode(node, options = {}) {
       name: node.name,
       ok: true,
       checkedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAt,
     }
   }
   catch (error) {
@@ -53,6 +56,7 @@ export async function probeNode(node, options = {}) {
       name: node.name,
       ok: false,
       checkedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAt,
       error: formatError(error),
     }
   }
