@@ -424,7 +424,6 @@ function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7
       const args = [
         '--silent',
         '--show-error',
-        '--fail',
         '--header', 'content-type: application/json',
         '--data', payload,
         `https://api.telegram.org/bot${botToken}/sendMessage`,
