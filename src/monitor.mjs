@@ -425,7 +425,7 @@ function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7
         '--silent',
         '--show-error',
         '--header', 'content-type: application/json',
-        '--data', payload,
+        '--data-binary', '@-',
         `https://api.telegram.org/bot${botToken}/sendMessage`,
       ]
 
@@ -435,11 +435,13 @@ function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7
       }
 
       const child = spawn('curl', args, {
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
       })
 
       let stdout = ''
       let stderr = ''
+
+      child.stdin?.end(Buffer.from(payload, 'utf8'))
 
       child.stdout?.on('data', chunk => {
         stdout += chunk.toString()
