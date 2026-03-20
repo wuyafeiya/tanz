@@ -54,6 +54,7 @@ pnpm monitor --config ./nodes.json --interval 30 --concurrency 8 --failure-thres
 ```bash
 export TELEGRAM_BOT_TOKEN=xxx
 export TELEGRAM_CHAT_ID=123456789
+export TELEGRAM_PROXY=http://127.0.0.1:7897
 pnpm monitor --config ./nodes.json
 ```
 
@@ -87,6 +88,7 @@ JP SSR 01   DOWN    curl: (28) Connection timed out after 10002 milliseconds
 - 节点掉线时可使用浏览器通知提醒
 - 连续失败达到阈值后再告警，避免短暂抖动误报
 - 支持 Telegram 掉线与恢复通知
+- Telegram 通知可单独走代理，默认 `http://127.0.0.1:7897`
 
 ## 配置格式
 

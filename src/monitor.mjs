@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { renderDashboardHtml } from './dashboard.mjs'
 import { probeNode } from './probe.mjs'
@@ -15,13 +17,13 @@ const MAX_ALERTS = 30
 
 /**
  * @param {ProbeNode[]} nodes
- * @param {{ host?: string, port?: number, intervalSeconds?: number, concurrency?: number, failureThreshold?: number, targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number, telegramBotToken?: string, telegramChatId?: string }} options
+ * @param {{ host?: string, port?: number, intervalSeconds?: number, concurrency?: number, failureThreshold?: number, targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number, telegramBotToken?: string, telegramChatId?: string, telegramProxy?: string }} options
  */
 export function createMonitor(nodes, options = {}) {
   const host = options.host ?? DEFAULT_HOST
   const port = options.port ?? DEFAULT_PORT
   const html = renderDashboardHtml({ title: 'Node Probe Monitor' })
-  const telegram = createTelegramNotifier(options.telegramBotToken, options.telegramChatId)
+  const telegram = createTelegramNotifier(options.telegramBotToken, options.telegramChatId, options.telegramProxy)
 
   let intervalSeconds = normalizeInterval(options.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS)
   let concurrency = normalizePositiveInt(options.concurrency ?? DEFAULT_CONCURRENCY, '并发数')
@@ -41,6 +43,7 @@ export function createMonitor(nodes, options = {}) {
       startupTimeoutMs: options.startupTimeoutMs,
       requestTimeoutSeconds: options.requestTimeoutSeconds,
       telegramEnabled: telegram.enabled,
+      telegramProxy: telegram.proxy,
     },
     cycle: {
       running: false,
@@ -368,35 +371,68 @@ async function sendTelegramAlert(telegram, alert) {
   await telegram.sendMessage(`[${alert.level.toUpperCase()}] ${alert.title}\n${alert.message}\n${alert.at}`)
 }
 
-function createTelegramNotifier(botToken, chatId) {
+function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7897') {
   if (!botToken || !chatId) {
     return {
       enabled: false,
+      proxy: undefined,
       async sendMessage() {},
     }
   }
 
   return {
     enabled: true,
+    proxy: proxyUrl,
     async sendMessage(text) {
-      const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text,
-        }),
+      const payload = JSON.stringify({
+        chat_id: chatId,
+        text,
       })
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
+      const args = [
+        '--silent',
+        '--show-error',
+        '--fail',
+        '--header', 'content-type: application/json',
+        '--data', payload,
+        `https://api.telegram.org/bot${botToken}/sendMessage`,
+      ]
+
+      if (proxyUrl) {
+        args.unshift(proxyUrl)
+        args.unshift('--proxy')
       }
 
-      const payload = await response.json()
-      if (!payload.ok) {
-        throw new Error(payload.description ?? 'unknown telegram error')
+      const child = spawn('curl', args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+
+      let stdout = ''
+      let stderr = ''
+
+      child.stdout?.on('data', chunk => {
+        stdout += chunk.toString()
+      })
+
+      child.stderr?.on('data', chunk => {
+        stderr += chunk.toString()
+      })
+
+      const [code] = /** @type {[number | null, NodeJS.Signals | null]} */ (await once(child, 'exit'))
+      if (code !== 0) {
+        throw new Error(stderr.trim() || `curl exit code ${code}`)
+      }
+
+      let response
+      try {
+        response = JSON.parse(stdout)
+      }
+      catch {
+        throw new Error('Telegram 返回了无法解析的响应')
+      }
+
+      if (!response.ok) {
+        throw new Error(response.description ?? 'unknown telegram error')
       }
     },
   }
