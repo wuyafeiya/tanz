@@ -453,12 +453,12 @@ export function createMonitor(nodes, options = {}) {
           current.paused = false
           current.pauseReason = undefined
           current.lastAlertAt = result.checkedAt
-          const alert = createAlert('节点恢复', `${node.name} ${node.server}`, `${node.name} ${node.server}`)
+          const alert = createAlert('ok', '节点恢复', `${node.name} ${node.server}`)
           pushAlert(alert)
           await sendTelegramAlert(telegram, alert)
         }
         else if (previousStatus === 'down') {
-          pushAlert(createAlert('节点恢复', `${node.name} ${node.server}`, `${node.name} ${node.server}`))
+          pushAlert(createAlert('ok', '节点恢复', `${node.name} ${node.server}`))
         }
 
         scheduleNode(index, intervalSeconds * 1000)
@@ -476,8 +476,8 @@ export function createMonitor(nodes, options = {}) {
         current.pauseReason = '达到失败阈值后已暂停，请改 IP 或手动立即探测恢复'
         current.lastAlertAt = result.checkedAt
         const alert = createAlert(
+          'down',
           '节点疑似故障',
-          `${node.name} ${node.server}`,
           `${node.name} ${node.server}`,
         )
         pushAlert(alert)
