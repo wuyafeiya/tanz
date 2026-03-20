@@ -14,7 +14,7 @@ const DEFAULT_FAILURE_THRESHOLD = 3
 const DEFAULT_RETRY_ATTEMPTS = 3
 const DEFAULT_RETRY_DELAY_MS = 800
 const DEFAULT_ATTEMPT_STARTUP_TIMEOUT_MS = 2000
-const DEFAULT_ATTEMPT_REQUEST_TIMEOUT_SECONDS = 10
+const DEFAULT_ATTEMPT_REQUEST_TIMEOUT_SECONDS = 8
 const MAX_ALERTS = 30
 
 /**
@@ -522,7 +522,7 @@ async function sendTelegramAlert(telegram, alert) {
     return { responseSnippet: '' }
   }
 
-  return await telegram.sendMessage(`[${alert.level.toUpperCase()}] ${alert.title}\n${alert.message}\n${alert.at}`)
+  return await telegram.sendMessage(buildTelegramMessage(alert))
 }
 
 function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7897') {
@@ -698,4 +698,38 @@ function maskChatId(value) {
     return text
   }
   return `***${text.slice(-4)}`
+}
+
+function buildTelegramMessage(alert) {
+  if (alert.title === '节点疑似故障' || alert.title === '节点恢复') {
+    return `${alert.title}\n${alert.message}\n${formatChinaTime(alert.at)}`
+  }
+
+  if (alert.title === 'Telegram 测试消息') {
+    return alert.title
+  }
+
+  return `${alert.title}\n${alert.message}`
+}
+
+function formatChinaTime(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return String(value)
+  }
+
+  const formatter = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
+
+  const parts = formatter.formatToParts(date)
+  const map = Object.fromEntries(parts.map(part => [part.type, part.value]))
+  return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`
 }
