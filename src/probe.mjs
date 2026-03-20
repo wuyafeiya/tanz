@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { basename } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 const DEFAULT_TARGET_URL = 'https://www.gstatic.com/generate_204'
@@ -106,6 +107,22 @@ function spawnLocalProxy(node, localPort) {
  * @param {number} localPort
  */
 function buildArgs(node, localPort) {
+  const binary = node.binary ?? (node.type === 'ss' ? 'ss-local' : 'ssr-local')
+  const executable = basename(binary).toLowerCase()
+
+  if (executable === 'sslocal' || executable === 'sslocal.exe') {
+    if (node.type !== 'ss') {
+      throw new Error('sslocal 目前只按 ss 节点方式适配，ssr 请继续使用 ssr-local')
+    }
+
+    return [
+      '-b', `127.0.0.1:${localPort}`,
+      '-s', `${node.server}:${node.port}`,
+      '-m', node.method,
+      '-k', node.password,
+    ]
+  }
+
   const args = [
     '-s', node.server,
     '-p', String(node.port),

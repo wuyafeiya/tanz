@@ -46,13 +46,16 @@ function validateNode(value) {
   }
 
   const node = /** @type {Record<string, unknown>} */ (value)
-  const requiredTextFields = ['id', 'name', 'type', 'server', 'method', 'password']
+  const requiredTextFields = ['name', 'type', 'server', 'password']
 
   for (const field of requiredTextFields) {
     if (typeof node[field] !== 'string' || node[field].trim() === '') {
       throw new Error(`节点字段无效: ${field}`)
     }
   }
+
+  const id = typeof node.id === 'string' && node.id.trim() !== '' ? node.id : String(node.name)
+  const method = resolveMethod(node)
 
   if (node.type !== 'ss' && node.type !== 'ssr') {
     throw new Error(`不支持的节点类型: ${String(node.type)}`)
@@ -63,12 +66,12 @@ function validateNode(value) {
   }
 
   return /** @type {ProbeNode} */ ({
-    id: node.id,
+    id,
     name: node.name,
     type: node.type,
     server: node.server,
     port: node.port,
-    method: node.method,
+    method,
     password: node.password,
     protocol: asOptionalText(node.protocol),
     protocolParam: asOptionalText(node.protocolParam),
@@ -84,4 +87,21 @@ function validateNode(value) {
  */
 function asOptionalText(value) {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
+}
+
+/**
+ * @param {Record<string, unknown>} node
+ */
+function resolveMethod(node) {
+  const method = asOptionalText(node.method)
+  if (method) {
+    return method
+  }
+
+  const cipher = asOptionalText(node.cipher)
+  if (cipher) {
+    return cipher
+  }
+
+  throw new Error('节点字段无效: method/cipher')
 }
