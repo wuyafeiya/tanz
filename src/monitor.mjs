@@ -8,7 +8,7 @@ import { probeNode } from './probe.mjs'
 
 const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_PORT = 3456
-const DEFAULT_INTERVAL_SECONDS = 30
+const DEFAULT_INTERVAL_SECONDS = 10
 const DEFAULT_CONCURRENCY = 4
 const DEFAULT_FAILURE_THRESHOLD = 3
 const DEFAULT_RETRY_ATTEMPTS = 3
@@ -453,12 +453,12 @@ export function createMonitor(nodes, options = {}) {
           current.paused = false
           current.pauseReason = undefined
           current.lastAlertAt = result.checkedAt
-          const alert = createAlert('ok', `${node.name} 已恢复`, `${node.name} 在 ${result.checkedAt} 恢复可用。`)
+          const alert = createAlert('节点恢复', `${node.name} ${node.server}`, `${node.name} ${node.server}`)
           pushAlert(alert)
           await sendTelegramAlert(telegram, alert)
         }
         else if (previousStatus === 'down') {
-          pushAlert(createAlert('ok', `${node.name} 已恢复`, `${node.name} 在 ${result.checkedAt} 恢复可用。`))
+          pushAlert(createAlert('节点恢复', `${node.name} ${node.server}`, `${node.name} ${node.server}`))
         }
 
         scheduleNode(index, intervalSeconds * 1000)
@@ -476,9 +476,9 @@ export function createMonitor(nodes, options = {}) {
         current.pauseReason = '达到失败阈值后已暂停，请改 IP 或手动立即探测恢复'
         current.lastAlertAt = result.checkedAt
         const alert = createAlert(
-          'down',
-          `${node.name} 掉线`,
-          `${node.name} 已连续失败 ${current.consecutiveFailures} 次：${result.error ?? 'unknown error'}`,
+          '节点疑似故障',
+          `${node.name} ${node.server}`,
+          `${node.name} ${node.server}`,
         )
         pushAlert(alert)
         await sendTelegramAlert(telegram, alert)

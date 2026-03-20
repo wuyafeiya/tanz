@@ -64,7 +64,7 @@ function parseArgs(argv) {
     config: 'nodes.json',
     host: '127.0.0.1',
     port: 3456,
-    intervalSeconds: 30,
+    intervalSeconds: 10,
     concurrency: 4,
     failureThreshold: 3,
     targetUrl: 'https://www.gstatic.com/generate_204',
