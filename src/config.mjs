@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 
 /**
- * @typedef {'ss' | 'ssr'} NodeType
+ * @typedef {'ss'} NodeType
  */
 
 /**
@@ -13,13 +13,8 @@ import { readFile, writeFile } from 'node:fs/promises'
  * @property {number} port
  * @property {string} method
  * @property {string} password
- * @property {string=} protocol
- * @property {string=} protocolParam
- * @property {string=} obfs
- * @property {string=} obfsParam
  * @property {string=} binary
  * @property {string=} remarks
- * @property {boolean=} udp
  */
 
 /**
@@ -98,7 +93,7 @@ function validateNode(value) {
   const id = typeof node.id === 'string' && node.id.trim() !== '' ? node.id : String(node.name)
   const method = resolveMethod(node)
 
-  if (node.type !== 'ss' && node.type !== 'ssr') {
+  if (node.type !== 'ss') {
     throw new Error(`不支持的节点类型: ${String(node.type)}`)
   }
 
@@ -114,13 +109,8 @@ function validateNode(value) {
     port: node.port,
     method,
     password: node.password,
-    protocol: asOptionalText(node.protocol),
-    protocolParam: resolveAliasText(node, ['protocolParam', 'protocolparam', 'protocol-param']),
-    obfs: asOptionalText(node.obfs),
-    obfsParam: resolveAliasText(node, ['obfsParam', 'obfsparam', 'obfs-param']),
     binary: asOptionalText(node.binary),
     remarks: asOptionalText(node.remarks),
-    udp: typeof node.udp === 'boolean' ? node.udp : undefined,
   })
 }
 
@@ -134,20 +124,6 @@ function asOptionalText(value) {
 /**
  * @param {Record<string, unknown>} node
  * @param {string[]} aliases
- */
-function resolveAliasText(node, aliases) {
-  for (const key of aliases) {
-    const value = asOptionalText(node[key])
-    if (value) {
-      return value
-    }
-  }
-
-  return undefined
-}
-
-/**
- * @param {Record<string, unknown>} node
  */
 function resolveMethod(node) {
   const method = asOptionalText(node.method)
