@@ -571,6 +571,8 @@ export function renderDashboardHtml(options) {
 
       /** @type {Map<string, boolean>} */
       const lastNodeAlertState = new Map()
+      /** @type {Map<string, string>} */
+      const nodeServerDrafts = new Map()
       let toastTimer = null
       let latestSnapshot = null
       let nextRunTicker = null
@@ -767,6 +769,8 @@ export function renderDashboardHtml(options) {
         for (const node of nodes) {
           const item = document.createElement('article')
           item.className = 'node'
+          const draftServer = nodeServerDrafts.get(node.id)
+          const inputValue = draftServer !== undefined ? draftServer : node.server
 
           const errorText = node.lastError
             ? '最近错误：' + node.lastError
@@ -791,7 +795,7 @@ export function renderDashboardHtml(options) {
                 <span class="badge" data-node-attempt-label="\${node.id}">\${node.paused ? '已暂停轮询' : node.status === 'running' && node.currentAttempt > 0 ? '第 ' + node.currentAttempt + '/' + node.currentAttemptMax + ' 次尝试' : '失败即时重试 ' + (latestSnapshot?.settings?.retryAttempts ?? 3) + ' 次'}</span>
               </div>
               <div class="node-editor">
-                <input type="text" data-node-server-input="\${node.id}" value="\${node.server}" spellcheck="false" />
+                <input type="text" data-node-server-input="\${node.id}" value="\${inputValue}" spellcheck="false" />
                 <button class="secondary" data-node-server-save="\${node.id}">保存服务器地址</button>
               </div>
             </div>
@@ -936,6 +940,7 @@ export function renderDashboardHtml(options) {
         button.disabled = true
         try {
           await postJson('/api/node-server', { nodeId, server })
+          nodeServerDrafts.delete(nodeId)
           showToast('服务器地址已保存')
         }
         catch (error) {
@@ -944,6 +949,26 @@ export function renderDashboardHtml(options) {
         finally {
           button.disabled = false
         }
+      })
+
+      nodeList.addEventListener('input', event => {
+        const input = event.target.closest('[data-node-server-input]')
+        if (!input) {
+          return
+        }
+
+        const nodeId = input.getAttribute('data-node-server-input')
+        if (!nodeId) {
+          return
+        }
+
+        const snapshotNode = latestSnapshot?.nodes?.find(node => node.id === nodeId)
+        if (snapshotNode && input.value === snapshotNode.server) {
+          nodeServerDrafts.delete(nodeId)
+          return
+        }
+
+        nodeServerDrafts.set(nodeId, input.value)
       })
 
       telegramTestButton.addEventListener('click', async () => {
