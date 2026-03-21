@@ -176,9 +176,13 @@ async function prepareProxyRuntime(node, localPort, options) {
       throw new Error(`SSR 节点缺少 protocol 或 obfs: ${node.name}`)
     }
 
+    const defaultConfigPath = join(dirname(binary), 'config.json')
     const tempDir = await mkdtemp(join(tmpdir(), 'node-probe-ssr-'))
-    const configPath = join(tempDir, 'config.json')
-    const defaultConfig = await loadSsrClientTemplate(binary, options.logger)
+    const backupConfigPath = join(tempDir, 'config.backup.json')
+    const originalConfigText = await readFile(defaultConfigPath, 'utf8')
+    await writeFile(backupConfigPath, originalConfigText, 'utf8')
+    options.logger(`backed up ssr-client default config to ${backupConfigPath}`)
+    const defaultConfig = await loadSsrClientTemplate(defaultConfigPath, options.logger)
     const config = {
       ...defaultConfig,
       password: node.password,
@@ -213,18 +217,20 @@ async function prepareProxyRuntime(node, localPort, options) {
     }
 
     const configText = `${JSON.stringify(config, null, 2)}\n`
-    await writeFile(configPath, configText, 'utf8')
-    options.logger(`generated ssr-client config at ${configPath}`)
+    await writeFile(defaultConfigPath, configText, 'utf8')
+    options.logger(`updated ssr-client default config at ${defaultConfigPath}`)
 
     return {
       binary,
-      args: ['-c', configPath],
-      debugConfigPath: configPath,
+      args: [],
+      debugConfigPath: defaultConfigPath,
       debugConfigText: configText,
       logOutput(stream, text) {
         logChildOutput(options.logger, stream, text)
       },
       async cleanup(debug) {
+        await writeFile(defaultConfigPath, originalConfigText, 'utf8')
+        options.logger(`restored ssr-client default config from backup`)
         if (debug) {
           options.logger(`debug mode enabled, keeping temp dir ${tempDir}`)
           return
@@ -448,12 +454,10 @@ async function canConnect(port) {
 }
 
 /**
- * @param {string} binaryPath
+ * @param {string} defaultConfigPath
  * @param {(message: string) => void} logger
  */
-async function loadSsrClientTemplate(binaryPath, logger) {
-  const defaultConfigPath = join(dirname(binaryPath), 'config.json')
-
+async function loadSsrClientTemplate(defaultConfigPath, logger) {
   try {
     const raw = await readFile(defaultConfigPath, 'utf8')
     const parsed = JSON.parse(raw)

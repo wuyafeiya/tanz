@@ -21,7 +21,7 @@
   - `ss-local`
   - `ssr-local`
 
-Windows 下如果你使用 `shadowsocksr-native` 的 `ssr-client.exe`，当前版本也已支持。程序会优先读取 `ssr-client.exe` 同目录下默认的 `config.json` 作为模板，再覆盖当前节点需要的关键字段，生成临时 `config.json` 并通过 `-c <config_file>` 启动。
+Windows 下如果你使用 `shadowsocksr-native` 的 `ssr-client.exe`，当前版本也已支持。程序会先备份 `ssr-client.exe` 同目录下默认的 `config.json`，再把当前节点参数写入这份默认配置，启动探测，结束后再恢复原文件。
 
 如果二进制不在 PATH 中，可以在节点配置里通过 `binary` 字段写绝对路径。
 
