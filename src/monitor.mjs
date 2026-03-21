@@ -15,6 +15,8 @@ const DEFAULT_RETRY_ATTEMPTS = 3
 const DEFAULT_RETRY_DELAY_MS = 800
 const DEFAULT_ATTEMPT_STARTUP_TIMEOUT_MS = 2000
 const DEFAULT_ATTEMPT_REQUEST_TIMEOUT_SECONDS = 8
+const FIRST_FAILURE_RECHECK_DELAY_MS = 20_000
+const SECOND_FAILURE_RECHECK_DELAY_MS = 10_000
 const MAX_ALERTS = 30
 
 /**
@@ -78,6 +80,7 @@ export function createMonitor(nodes, options = {}) {
       alertActive: false,
       paused: false,
       pauseReason: undefined,
+      escalationStage: 0,
       nextRunAt: undefined,
       lastCheckedAt: undefined,
       lastOkAt: undefined,
@@ -368,6 +371,9 @@ export function createMonitor(nodes, options = {}) {
       if (nodeJobs[index].inFlight || state.nodes[index].paused) {
         continue
       }
+      if (state.nodes[index].alertActive && state.nodes[index].escalationStage > 0) {
+        continue
+      }
       scheduleNode(index, delayMs)
     }
   }
@@ -381,6 +387,9 @@ export function createMonitor(nodes, options = {}) {
       if (state.nodes[index].paused) {
         state.nodes[index].paused = false
         state.nodes[index].pauseReason = undefined
+        state.nodes[index].alertActive = false
+        state.nodes[index].consecutiveFailures = 0
+        state.nodes[index].escalationStage = 0
       }
 
       scheduleNode(index, 0)
@@ -395,6 +404,7 @@ export function createMonitor(nodes, options = {}) {
     current.alertActive = false
     current.paused = false
     current.pauseReason = undefined
+    current.escalationStage = 0
     current.lastError = undefined
     current.currentAttempt = 0
     current.currentAttemptMax = state.settings.retryAttempts
@@ -452,6 +462,7 @@ export function createMonitor(nodes, options = {}) {
           current.alertActive = false
           current.paused = false
           current.pauseReason = undefined
+          current.escalationStage = 0
           current.lastAlertAt = result.checkedAt
           const alert = createAlert('ok', '节点恢复', `${node.name} ${node.server}`)
           pushAlert(alert)
@@ -471,13 +482,44 @@ export function createMonitor(nodes, options = {}) {
 
       if (!current.alertActive && current.consecutiveFailures >= failureThreshold) {
         current.alertActive = true
-        current.status = 'paused'
-        current.paused = true
-        current.pauseReason = '达到失败阈值后已暂停，请改 IP 或手动立即探测恢复'
+        current.escalationStage = 1
+        current.pauseReason = '已发首次告警，20 秒后自动复测'
         current.lastAlertAt = result.checkedAt
         const alert = createAlert(
           'down',
           '节点疑似故障',
+          `${node.name} ${node.server}`,
+        )
+        pushAlert(alert)
+        await sendTelegramAlert(telegram, alert)
+        scheduleNode(index, FIRST_FAILURE_RECHECK_DELAY_MS)
+        return
+      }
+
+      if (current.alertActive && current.escalationStage === 1) {
+        current.escalationStage = 2
+        current.pauseReason = '20 秒后复测仍失败，10 秒后进行最终确认'
+        current.lastAlertAt = result.checkedAt
+        const alert = createAlert(
+          'down',
+          '节点二次尝试不通',
+          `${node.name} ${node.server}`,
+        )
+        pushAlert(alert)
+        await sendTelegramAlert(telegram, alert)
+        scheduleNode(index, SECOND_FAILURE_RECHECK_DELAY_MS)
+        return
+      }
+
+      if (current.alertActive && current.escalationStage === 2) {
+        current.status = 'paused'
+        current.paused = true
+        current.escalationStage = 3
+        current.pauseReason = '最终确认失败，节点已暂停，请改 IP 或手动立即探测恢复'
+        current.lastAlertAt = result.checkedAt
+        const alert = createAlert(
+          'down',
+          '节点故障',
           `${node.name} ${node.server}`,
         )
         pushAlert(alert)
@@ -701,7 +743,12 @@ function maskChatId(value) {
 }
 
 function buildTelegramMessage(alert) {
-  if (alert.title === '节点疑似故障' || alert.title === '节点恢复') {
+  if (
+    alert.title === '节点疑似故障'
+    || alert.title === '节点二次尝试不通'
+    || alert.title === '节点故障'
+    || alert.title === '节点恢复'
+  ) {
     return `${alert.title}\n${alert.message}\n${formatChinaTime(alert.at)}`
   }
 
