@@ -80,6 +80,7 @@ export async function probeNode(node, options = {}) {
  * @param {{ binary: string, args: string[] }} runtime
  */
 function spawnLocalProxy(runtime) {
+  const binary = runtime.binary
   const child = spawn(runtime.binary, runtime.args, {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
