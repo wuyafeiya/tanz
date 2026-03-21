@@ -134,6 +134,7 @@ JP SSR 01   DOWN    curl: (28) Connection timed out after 10002 milliseconds
   "protocolParam": "",
   "obfs": "tls1.2_ticket_auth",
   "obfsParam": "",
+  "udp": false,
   "binary": "ssr-local"
 }
 ```
@@ -152,6 +153,7 @@ JP SSR 01   DOWN    curl: (28) Connection timed out after 10002 milliseconds
   "protocolParam": "36551:test23",
   "obfs": "http_simple",
   "obfsParam": "appleid.apple.com/8b10e36551",
+  "udp": false,
   "binary": "C:\\\\path\\\\to\\\\ssr-client.exe"
 }
 ```

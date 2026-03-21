@@ -22,28 +22,47 @@ const DEFAULT_REQUEST_TIMEOUT_SECONDS = 10
  * @property {string} checkedAt
  * @property {number} durationMs
  * @property {string=} error
+ * @property {string=} debugConfigPath
  */
 
 /**
  * @param {ProbeNode} node
- * @param {{ targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number }} [options]
+ * @param {{ targetUrl?: string, startupTimeoutMs?: number, requestTimeoutSeconds?: number, debug?: boolean, logger?: (message: string) => void }} [options]
  * @returns {Promise<ProbeResult>}
  */
 export async function probeNode(node, options = {}) {
   const targetUrl = options.targetUrl ?? DEFAULT_TARGET_URL
   const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS
   const requestTimeoutSeconds = options.requestTimeoutSeconds ?? DEFAULT_REQUEST_TIMEOUT_SECONDS
+  const debug = options.debug === true
+  const log = options.logger ?? (() => {})
   const localPort = await getFreePort()
   const startedAt = Date.now()
-  const runtime = await prepareProxyRuntime(node, localPort)
+  log(`allocated local port ${localPort}`)
+  const runtime = await prepareProxyRuntime(node, localPort, { debug, logger: log })
+  log(`runtime binary: ${runtime.binary}`)
+  log(`runtime args: ${runtime.args.join(' ')}`)
+  if (runtime.debugConfigPath) {
+    log(`config file: ${runtime.debugConfigPath}`)
+  }
+  if (runtime.debugConfigText) {
+    log('generated config:')
+    for (const line of runtime.debugConfigText.trimEnd().split('\n')) {
+      log(`  ${line}`)
+    }
+  }
 
   /** @type {import('node:child_process').ChildProcess | undefined} */
   let child
 
   try {
+    log(`spawning local proxy`)
     child = spawnLocalProxy(runtime)
-    await waitForProxyReady(child, startupTimeoutMs)
-    await runCurlProbe(localPort, targetUrl, requestTimeoutSeconds)
+    log(`waiting for proxy startup up to ${startupTimeoutMs}ms`)
+    await waitForProxyReady(child, startupTimeoutMs, log)
+    log(`starting curl probe to ${targetUrl} with timeout ${requestTimeoutSeconds}s`)
+    await runCurlProbe(localPort, targetUrl, requestTimeoutSeconds, log)
+    log(`probe finished successfully`)
 
     return {
       nodeId: node.id,
@@ -51,9 +70,11 @@ export async function probeNode(node, options = {}) {
       ok: true,
       checkedAt: new Date().toISOString(),
       durationMs: Date.now() - startedAt,
+      debugConfigPath: runtime.debugConfigPath,
     }
   }
   catch (error) {
+    log(`probe failed: ${formatError(error)}`)
     return {
       nodeId: node.id,
       name: node.name,
@@ -61,10 +82,12 @@ export async function probeNode(node, options = {}) {
       checkedAt: new Date().toISOString(),
       durationMs: Date.now() - startedAt,
       error: formatError(error),
+      debugConfigPath: runtime.debugConfigPath,
     }
   }
   finally {
     if (child && !child.killed) {
+      log(`stopping local proxy`)
       child.kill('SIGTERM')
       await Promise.race([once(child, 'exit'), sleep(800)]).catch(() => {})
       if (!child.killed) {
@@ -72,7 +95,7 @@ export async function probeNode(node, options = {}) {
       }
     }
 
-    await runtime.cleanup()
+    await runtime.cleanup(debug)
   }
 }
 
@@ -89,11 +112,15 @@ function spawnLocalProxy(runtime) {
   let stdout = ''
 
   child.stdout?.on('data', chunk => {
-    stdout += chunk.toString()
+    const text = chunk.toString()
+    stdout += text
+    runtime.logOutput('stdout', text)
   })
 
   child.stderr?.on('data', chunk => {
-    stderr += chunk.toString()
+    const text = chunk.toString()
+    stderr += text
+    runtime.logOutput('stderr', text)
   })
 
   child.on('error', error => {
@@ -113,8 +140,9 @@ function spawnLocalProxy(runtime) {
 /**
  * @param {ProbeNode} node
  * @param {number} localPort
+ * @param {{ debug: boolean, logger: (message: string) => void }} options
  */
-async function prepareProxyRuntime(node, localPort) {
+async function prepareProxyRuntime(node, localPort, options) {
   const binary = node.binary ?? (node.type === 'ss' ? 'ss-local' : 'ssr-local')
   const executable = basename(binary).toLowerCase()
 
@@ -131,6 +159,9 @@ async function prepareProxyRuntime(node, localPort) {
         '-m', node.method,
         '-k', node.password,
       ],
+      logOutput(stream, text) {
+        logChildOutput(options.logger, stream, text)
+      },
       async cleanup() {},
     }
   }
@@ -153,7 +184,7 @@ async function prepareProxyRuntime(node, localPort) {
       protocol_param: node.protocolParam ?? '',
       obfs: node.obfs,
       obfs_param: node.obfsParam ?? '',
-      udp: true,
+      udp: node.udp ?? false,
       idle_timeout: 300,
       connect_timeout: 6,
       udp_timeout: 6,
@@ -175,12 +206,23 @@ async function prepareProxyRuntime(node, localPort) {
       },
     }
 
-    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8')
+    const configText = `${JSON.stringify(config, null, 2)}\n`
+    await writeFile(configPath, configText, 'utf8')
+    options.logger(`generated ssr-client config at ${configPath}`)
 
     return {
       binary,
       args: ['-c', configPath],
-      async cleanup() {
+      debugConfigPath: configPath,
+      debugConfigText: configText,
+      logOutput(stream, text) {
+        logChildOutput(options.logger, stream, text)
+      },
+      async cleanup(debug) {
+        if (debug) {
+          options.logger(`debug mode enabled, keeping temp dir ${tempDir}`)
+          return
+        }
         await rm(tempDir, { recursive: true, force: true }).catch(() => {})
       },
     }
@@ -213,6 +255,9 @@ async function prepareProxyRuntime(node, localPort) {
   return {
     binary,
     args,
+    logOutput(stream, text) {
+      logChildOutput(options.logger, stream, text)
+    },
     async cleanup() {},
   }
 }
@@ -221,13 +266,14 @@ async function prepareProxyRuntime(node, localPort) {
  * @param {import('node:child_process').ChildProcess} child
  * @param {number} timeoutMs
  */
-async function waitForProxyReady(child, timeoutMs) {
+async function waitForProxyReady(child, timeoutMs, logger = () => {}) {
   let settled = false
 
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true
+        logger(`startup wait elapsed after ${timeoutMs}ms, continuing to probe`)
         resolve(undefined)
       }
     }, timeoutMs)
@@ -236,7 +282,17 @@ async function waitForProxyReady(child, timeoutMs) {
       if (!settled) {
         settled = true
         clearTimeout(timer)
+        logger(`startup failed before timeout: ${formatError(error)}`)
         reject(error)
+      }
+    })
+
+    child.once('exit', code => {
+      if (!settled && code === 0) {
+        settled = true
+        clearTimeout(timer)
+        logger('proxy exited cleanly during startup wait')
+        reject(new Error('本地代理在启动阶段提前退出'))
       }
     })
   })
@@ -247,7 +303,7 @@ async function waitForProxyReady(child, timeoutMs) {
  * @param {string} targetUrl
  * @param {number} timeoutSeconds
  */
-async function runCurlProbe(localPort, targetUrl, timeoutSeconds) {
+async function runCurlProbe(localPort, targetUrl, timeoutSeconds, logger = () => {}) {
   const nullDevice = platform() === 'win32' ? 'NUL' : '/dev/null'
   const args = [
     '--silent',
@@ -258,19 +314,27 @@ async function runCurlProbe(localPort, targetUrl, timeoutSeconds) {
     '--max-time', String(timeoutSeconds),
     targetUrl,
   ]
+  logger(`curl args: ${args.join(' ')}`)
 
   const child = spawn('curl', args, {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
   let stderr = ''
+  let stdout = ''
+  child.stdout?.on('data', chunk => {
+    stdout += chunk.toString()
+  })
   child.stderr?.on('data', chunk => {
-    stderr += chunk.toString()
+    const text = chunk.toString()
+    stderr += text
+    logChildOutput(logger, 'stderr', text)
   })
 
   const [code] = /** @type {[number | null, NodeJS.Signals | null]} */ (await once(child, 'exit'))
+  logger(`curl exit code: ${String(code)}`)
   if (code !== 0) {
-    throw new Error(stderr.trim() || `curl exit code ${code}`)
+    throw new Error(stderr.trim() || stdout.trim() || `curl exit code ${code}`)
   }
 }
 
@@ -301,4 +365,20 @@ function formatError(error) {
   }
 
   return String(error)
+}
+
+/**
+ * @param {(message: string) => void} logger
+ * @param {'stdout' | 'stderr'} stream
+ * @param {string} text
+ */
+function logChildOutput(logger, stream, text) {
+  const trimmed = text.replace(/\r/g, '').trim()
+  if (!trimmed) {
+    return
+  }
+
+  for (const line of trimmed.split('\n')) {
+    logger(`proxy ${stream}: ${line}`)
+  }
 }
