@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { basename } from 'node:path'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { platform } from 'node:os'
+import { basename, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { tmpdir } from 'node:os'
 
 const DEFAULT_TARGET_URL = 'https://www.gstatic.com/generate_204'
 const DEFAULT_STARTUP_TIMEOUT_MS = 4000
@@ -33,12 +35,13 @@ export async function probeNode(node, options = {}) {
   const requestTimeoutSeconds = options.requestTimeoutSeconds ?? DEFAULT_REQUEST_TIMEOUT_SECONDS
   const localPort = await getFreePort()
   const startedAt = Date.now()
+  const runtime = await prepareProxyRuntime(node, localPort)
 
   /** @type {import('node:child_process').ChildProcess | undefined} */
   let child
 
   try {
-    child = spawnLocalProxy(node, localPort)
+    child = spawnLocalProxy(runtime)
     await waitForProxyReady(child, startupTimeoutMs)
     await runCurlProbe(localPort, targetUrl, requestTimeoutSeconds)
 
@@ -68,17 +71,16 @@ export async function probeNode(node, options = {}) {
         child.kill('SIGKILL')
       }
     }
+
+    await runtime.cleanup()
   }
 }
 
 /**
- * @param {ProbeNode} node
- * @param {number} localPort
+ * @param {{ binary: string, args: string[] }} runtime
  */
-function spawnLocalProxy(node, localPort) {
-  const binary = node.binary ?? (node.type === 'ss' ? 'ss-local' : 'ssr-local')
-  const args = buildArgs(node, localPort)
-  const child = spawn(binary, args, {
+function spawnLocalProxy(runtime) {
+  const child = spawn(runtime.binary, runtime.args, {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
@@ -111,7 +113,7 @@ function spawnLocalProxy(node, localPort) {
  * @param {ProbeNode} node
  * @param {number} localPort
  */
-function buildArgs(node, localPort) {
+async function prepareProxyRuntime(node, localPort) {
   const binary = node.binary ?? (node.type === 'ss' ? 'ss-local' : 'ssr-local')
   const executable = basename(binary).toLowerCase()
 
@@ -120,12 +122,67 @@ function buildArgs(node, localPort) {
       throw new Error('sslocal 目前只按 ss 节点方式适配，ssr 请继续使用 ssr-local')
     }
 
-    return [
-      '-b', `127.0.0.1:${localPort}`,
-      '-s', `${node.server}:${node.port}`,
-      '-m', node.method,
-      '-k', node.password,
-    ]
+    return {
+      binary,
+      args: [
+        '-b', `127.0.0.1:${localPort}`,
+        '-s', `${node.server}:${node.port}`,
+        '-m', node.method,
+        '-k', node.password,
+      ],
+      async cleanup() {},
+    }
+  }
+
+  if (executable === 'ssr-client' || executable === 'ssr-client.exe') {
+    if (node.type !== 'ssr') {
+      throw new Error('ssr-client 仅用于 ssr 节点')
+    }
+
+    if (!node.protocol || !node.obfs) {
+      throw new Error(`SSR 节点缺少 protocol 或 obfs: ${node.name}`)
+    }
+
+    const tempDir = await mkdtemp(join(tmpdir(), 'node-probe-ssr-'))
+    const configPath = join(tempDir, 'config.json')
+    const config = {
+      password: node.password,
+      method: node.method,
+      protocol: node.protocol,
+      protocol_param: node.protocolParam ?? '',
+      obfs: node.obfs,
+      obfs_param: node.obfsParam ?? '',
+      udp: true,
+      idle_timeout: 300,
+      connect_timeout: 6,
+      udp_timeout: 6,
+      server_settings: {
+        listen_address: '0.0.0.0',
+        listen_port: node.port,
+      },
+      client_settings: {
+        server: node.server,
+        server_port: node.port,
+        listen_address: '127.0.0.1',
+        listen_port: localPort,
+      },
+      over_tls_settings: {
+        enable: false,
+        server_domain: 'goodsitesample.com',
+        path: '/udg151df/',
+        root_cert_file: '',
+      },
+    }
+
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8')
+
+    return {
+      binary,
+      args: ['-c', configPath],
+      async cleanup() {
+        await rm(tempDir, { recursive: true, force: true }).catch(() => {})
+      },
+    }
   }
 
   const args = [
@@ -152,7 +209,11 @@ function buildArgs(node, localPort) {
     }
   }
 
-  return args
+  return {
+    binary,
+    args,
+    async cleanup() {},
+  }
 }
 
 /**
