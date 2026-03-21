@@ -1,10 +1,9 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { platform } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { tmpdir } from 'node:os'
 import { Socket } from 'node:net'
 
 const DEFAULT_TARGET_URL = 'https://www.gstatic.com/generate_204'
@@ -41,8 +40,10 @@ export async function probeNode(node, options = {}) {
   const startedAt = Date.now()
   log(`allocated local port ${localPort}`)
   const runtime = await prepareProxyRuntime(node, localPort, { debug, logger: log })
+  const probePort = runtime.localPort ?? localPort
   log(`runtime binary: ${runtime.binary}`)
   log(`runtime args: ${runtime.args.join(' ')}`)
+  log(`probe port: ${probePort}`)
   if (runtime.debugConfigPath) {
     log(`config file: ${runtime.debugConfigPath}`)
   }
@@ -60,9 +61,9 @@ export async function probeNode(node, options = {}) {
     log(`spawning local proxy`)
     child = spawnLocalProxy(runtime)
     log(`waiting for proxy startup up to ${startupTimeoutMs}ms`)
-    await waitForProxyReady(child, localPort, startupTimeoutMs, log)
+    await waitForProxyReady(child, probePort, startupTimeoutMs, log)
     log(`starting curl probe to ${targetUrl} with timeout ${requestTimeoutSeconds}s`)
-    await runCurlProbe(localPort, targetUrl, requestTimeoutSeconds, log)
+    await runCurlProbe(probePort, targetUrl, requestTimeoutSeconds, log)
     log(`probe finished successfully`)
 
     return {
@@ -177,66 +178,21 @@ async function prepareProxyRuntime(node, localPort, options) {
     }
 
     const defaultConfigPath = join(dirname(binary), 'config.json')
-    const tempDir = await mkdtemp(join(tmpdir(), 'node-probe-ssr-'))
-    const backupConfigPath = join(tempDir, 'config.backup.json')
-    const originalConfigText = await readFile(defaultConfigPath, 'utf8')
-    await writeFile(backupConfigPath, originalConfigText, 'utf8')
-    options.logger(`backed up ssr-client default config to ${backupConfigPath}`)
     const defaultConfig = await loadSsrClientTemplate(defaultConfigPath, options.logger)
-    const config = {
-      ...defaultConfig,
-      password: node.password,
-      method: node.method,
-      protocol: node.protocol,
-      protocol_param: node.protocolParam ?? '',
-      obfs: node.obfs,
-      obfs_param: node.obfsParam ?? '',
-      udp: node.udp ?? defaultConfig.udp ?? false,
-      idle_timeout: defaultConfig.idle_timeout ?? 300,
-      connect_timeout: defaultConfig.connect_timeout ?? 6,
-      udp_timeout: defaultConfig.udp_timeout ?? 6,
-      server_settings: {
-        ...(defaultConfig.server_settings ?? {}),
-        listen_address: defaultConfig.server_settings?.listen_address ?? '0.0.0.0',
-        listen_port: node.port,
-      },
-      client_settings: {
-        ...(defaultConfig.client_settings ?? {}),
-        server: node.server,
-        server_port: node.port,
-        listen_address: '127.0.0.1',
-        listen_port: localPort,
-      },
-      over_tls_settings: {
-        enable: false,
-        server_domain: 'goodsitesample.com',
-        path: '/udg151df/',
-        root_cert_file: '',
-        ...(defaultConfig.over_tls_settings ?? {}),
-      },
-    }
-
-    const configText = `${JSON.stringify(config, null, 2)}\n`
-    await writeFile(defaultConfigPath, configText, 'utf8')
-    options.logger(`updated ssr-client default config at ${defaultConfigPath}`)
+    const configText = `${JSON.stringify(defaultConfig, null, 2)}\n`
+    const configuredPort = resolveSsrClientListenPort(defaultConfig)
+    options.logger(`using ssr-client default config at ${defaultConfigPath}`)
 
     return {
       binary,
       args: [],
+      localPort: configuredPort,
       debugConfigPath: defaultConfigPath,
       debugConfigText: configText,
       logOutput(stream, text) {
         logChildOutput(options.logger, stream, text)
       },
-      async cleanup(debug) {
-        await writeFile(defaultConfigPath, originalConfigText, 'utf8')
-        options.logger(`restored ssr-client default config from backup`)
-        if (debug) {
-          options.logger(`debug mode enabled, keeping temp dir ${tempDir}`)
-          return
-        }
-        await rm(tempDir, { recursive: true, force: true }).catch(() => {})
-      },
+      async cleanup() {},
     }
   }
 
@@ -468,4 +424,19 @@ async function loadSsrClientTemplate(defaultConfigPath, logger) {
     logger(`default ssr-client config not used: ${formatError(error)}`)
     return {}
   }
+}
+
+/**
+ * @param {Record<string, unknown>} config
+ */
+function resolveSsrClientListenPort(config) {
+  const clientSettings = config.client_settings
+  if (clientSettings && typeof clientSettings === 'object') {
+    const listenPort = /** @type {Record<string, unknown>} */ (clientSettings).listen_port
+    if (typeof listenPort === 'number' && Number.isInteger(listenPort) && listenPort > 0) {
+      return listenPort
+    }
+  }
+
+  return 1080
 }
