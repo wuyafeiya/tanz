@@ -5,6 +5,7 @@ import { platform } from 'node:os'
 import { basename, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { tmpdir } from 'node:os'
+import { Socket } from 'node:net'
 
 const DEFAULT_TARGET_URL = 'https://www.gstatic.com/generate_204'
 const DEFAULT_STARTUP_TIMEOUT_MS = 4000
@@ -59,7 +60,7 @@ export async function probeNode(node, options = {}) {
     log(`spawning local proxy`)
     child = spawnLocalProxy(runtime)
     log(`waiting for proxy startup up to ${startupTimeoutMs}ms`)
-    await waitForProxyReady(child, startupTimeoutMs, log)
+    await waitForProxyReady(child, localPort, startupTimeoutMs, log)
     log(`starting curl probe to ${targetUrl} with timeout ${requestTimeoutSeconds}s`)
     await runCurlProbe(localPort, targetUrl, requestTimeoutSeconds, log)
     log(`probe finished successfully`)
@@ -266,22 +267,15 @@ async function prepareProxyRuntime(node, localPort, options) {
  * @param {import('node:child_process').ChildProcess} child
  * @param {number} timeoutMs
  */
-async function waitForProxyReady(child, timeoutMs, logger = () => {}) {
+async function waitForProxyReady(child, localPort, timeoutMs, logger = () => {}) {
   let settled = false
 
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true
-        logger(`startup wait elapsed after ${timeoutMs}ms, continuing to probe`)
-        resolve(undefined)
-      }
-    }, timeoutMs)
+    const deadline = Date.now() + timeoutMs
 
     child.once('probe-error', error => {
       if (!settled) {
         settled = true
-        clearTimeout(timer)
         logger(`startup failed before timeout: ${formatError(error)}`)
         reject(error)
       }
@@ -290,9 +284,36 @@ async function waitForProxyReady(child, timeoutMs, logger = () => {}) {
     child.once('exit', code => {
       if (!settled && code === 0) {
         settled = true
-        clearTimeout(timer)
         logger('proxy exited cleanly during startup wait')
         reject(new Error('本地代理在启动阶段提前退出'))
+      }
+    })
+
+    const poll = async () => {
+      while (!settled) {
+        const ready = await canConnect(localPort)
+        if (ready) {
+          settled = true
+          logger(`local proxy port 127.0.0.1:${localPort} is ready`)
+          resolve(undefined)
+          return
+        }
+
+        if (Date.now() >= deadline) {
+          settled = true
+          logger(`startup wait elapsed after ${timeoutMs}ms, local port 127.0.0.1:${localPort} is still not ready`)
+          reject(new Error(`本地代理端口未就绪: 127.0.0.1:${localPort}`))
+          return
+        }
+
+        await sleep(200)
+      }
+    }
+
+    poll().catch(error => {
+      if (!settled) {
+        settled = true
+        reject(error)
       }
     })
   })
@@ -323,12 +344,14 @@ async function runCurlProbe(localPort, targetUrl, timeoutSeconds, logger = () =>
   let stderr = ''
   let stdout = ''
   child.stdout?.on('data', chunk => {
-    stdout += chunk.toString()
+    const text = chunk.toString()
+    stdout += text
+    logProcessOutput(logger, 'curl', 'stdout', text)
   })
   child.stderr?.on('data', chunk => {
     const text = chunk.toString()
     stderr += text
-    logChildOutput(logger, 'stderr', text)
+    logProcessOutput(logger, 'curl', 'stderr', text)
   })
 
   const [code] = /** @type {[number | null, NodeJS.Signals | null]} */ (await once(child, 'exit'))
@@ -373,12 +396,48 @@ function formatError(error) {
  * @param {string} text
  */
 function logChildOutput(logger, stream, text) {
+  logProcessOutput(logger, 'proxy', stream, text)
+}
+
+/**
+ * @param {(message: string) => void} logger
+ * @param {'proxy' | 'curl'} processName
+ * @param {'stdout' | 'stderr'} stream
+ * @param {string} text
+ */
+function logProcessOutput(logger, processName, stream, text) {
   const trimmed = text.replace(/\r/g, '').trim()
   if (!trimmed) {
     return
   }
 
   for (const line of trimmed.split('\n')) {
-    logger(`proxy ${stream}: ${line}`)
+    logger(`${processName} ${stream}: ${line}`)
   }
+}
+
+/**
+ * @param {number} port
+ * @returns {Promise<boolean>}
+ */
+async function canConnect(port) {
+  return await new Promise(resolve => {
+    const socket = new Socket()
+    let settled = false
+
+    const finish = success => {
+      if (settled) {
+        return
+      }
+      settled = true
+      socket.destroy()
+      resolve(success)
+    }
+
+    socket.setTimeout(200)
+    socket.once('connect', () => finish(true))
+    socket.once('timeout', () => finish(false))
+    socket.once('error', () => finish(false))
+    socket.connect(port, '127.0.0.1')
+  })
 }
