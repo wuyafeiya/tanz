@@ -16,19 +16,33 @@ async function main() {
   let hasFailure = false
 
   for (const node of nodes) {
+    if (args.debug) {
+      console.log(`\n[debug] probing ${node.name} (${node.type})`)
+    }
+
     const result = await probeNode(node, {
       targetUrl: args.targetUrl,
       startupTimeoutMs: args.startupTimeoutMs,
       requestTimeoutSeconds: args.requestTimeoutSeconds,
+      debug: args.debug,
+      logger(message) {
+        console.log(`[debug] ${message}`)
+      },
     })
 
     if (result.ok) {
       console.log(`${result.name}\tUP`)
+      if (args.debug && result.debugConfigPath) {
+        console.log(`[debug] config kept at ${result.debugConfigPath}`)
+      }
       continue
     }
 
     hasFailure = true
     console.log(`${result.name}\tDOWN\t${result.error ?? 'unknown error'}`)
+    if (args.debug && result.debugConfigPath) {
+      console.log(`[debug] config kept at ${result.debugConfigPath}`)
+    }
   }
 
   process.exitCode = hasFailure ? 1 : 0
@@ -43,6 +57,7 @@ function parseArgs(argv) {
     targetUrl: 'https://www.gstatic.com/generate_204',
     startupTimeoutMs: 4000,
     requestTimeoutSeconds: 10,
+    debug: false,
   }
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -66,6 +81,9 @@ function parseArgs(argv) {
         options.requestTimeoutSeconds = Number(nextValue)
         index += 1
         break
+      case '--debug':
+        options.debug = true
+        break
       case '--help':
       case '-h':
         printHelp()
@@ -88,6 +106,7 @@ Options:
   --target <url>             探测目标 URL
   --startup-timeout <ms>     本地代理启动等待时间
   --request-timeout <sec>    curl 请求超时
+  --debug                    输出详细调试日志
 `)
 }
 

@@ -19,6 +19,7 @@ import { readFile, writeFile } from 'node:fs/promises'
  * @property {string=} obfsParam
  * @property {string=} binary
  * @property {string=} remarks
+ * @property {boolean=} udp
  */
 
 /**
@@ -114,11 +115,12 @@ function validateNode(value) {
     method,
     password: node.password,
     protocol: asOptionalText(node.protocol),
-    protocolParam: asOptionalText(node.protocolParam),
+    protocolParam: resolveAliasText(node, ['protocolParam', 'protocolparam', 'protocol-param']),
     obfs: asOptionalText(node.obfs),
-    obfsParam: asOptionalText(node.obfsParam),
+    obfsParam: resolveAliasText(node, ['obfsParam', 'obfsparam', 'obfs-param']),
     binary: asOptionalText(node.binary),
     remarks: asOptionalText(node.remarks),
+    udp: typeof node.udp === 'boolean' ? node.udp : undefined,
   })
 }
 
@@ -127,6 +129,21 @@ function validateNode(value) {
  */
 function asOptionalText(value) {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
+}
+
+/**
+ * @param {Record<string, unknown>} node
+ * @param {string[]} aliases
+ */
+function resolveAliasText(node, aliases) {
+  for (const key of aliases) {
+    const value = asOptionalText(node[key])
+    if (value) {
+      return value
+    }
+  }
+
+  return undefined
 }
 
 /**

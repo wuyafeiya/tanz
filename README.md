@@ -21,6 +21,8 @@
   - `ss-local`
   - `ssr-local`
 
+Windows 下如果你使用 `shadowsocksr-native` 的 `ssr-client.exe`，当前版本也已支持。程序会先备份 `ssr-client.exe` 同目录下默认的 `config.json`，再把当前节点参数写入这份默认配置，启动探测，结束后再恢复原文件。
+
 如果二进制不在 PATH 中，可以在节点配置里通过 `binary` 字段写绝对路径。
 
 ## 使用
@@ -129,8 +131,30 @@ JP SSR 01   DOWN    curl: (28) Connection timed out after 10002 milliseconds
   "method": "aes-256-cfb",
   "password": "your-password",
   "protocol": "auth_sha1_v4",
+  "protocolParam": "",
   "obfs": "tls1.2_ticket_auth",
+  "obfsParam": "",
+  "udp": false,
   "binary": "ssr-local"
+}
+```
+
+如果你在 Windows 上使用 `ssr-client.exe`，可以把 `binary` 指向该文件绝对路径:
+
+```json
+{
+  "name": "HK PRO 11",
+  "type": "ssr",
+  "server": "su813nd.cdn.ns186.com",
+  "port": 5111,
+  "cipher": "rc4-md5",
+  "password": "OriginCloud",
+  "protocol": "auth_aes128_md5",
+  "protocolParam": "36551:test23",
+  "obfs": "http_simple",
+  "obfsParam": "appleid.apple.com/8b10e36551",
+  "udp": false,
+  "binary": "C:\\\\path\\\\to\\\\ssr-client.exe"
 }
 ```
 
