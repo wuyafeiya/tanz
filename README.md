@@ -1,12 +1,12 @@
 # 节点可连接性探测器
 
-只做一件事: 检测 `ss` / `ssr` 节点当前能否正常连接。
+只做一件事: 检测 `ss` 节点当前能否正常连接。
 
 ## 原理
 
 每个节点执行以下流程:
 
-1. 启动本地 `ss-local` 或 `ssr-local`
+1. 启动本地 `ss-local`
 2. 在本地打开一个临时 SOCKS5 端口
 3. 用 `curl` 通过这个 SOCKS5 代理请求固定 URL
 4. 请求成功则输出 `UP`，失败则输出 `DOWN`
@@ -17,11 +17,7 @@
 
 - Node.js 24+
 - 本机已安装 `curl`
-- 本机已安装:
-  - `ss-local`
-  - `ssr-local`
-
-Windows 下如果你使用 `shadowsocksr-native` 的 `ssr-client.exe`，当前版本也已支持。程序会先备份 `ssr-client.exe` 同目录下默认的 `config.json`，再把当前节点参数写入这份默认配置，启动探测，结束后再恢复原文件。
+- 本机已安装 `ss-local`
 
 如果二进制不在 PATH 中，可以在节点配置里通过 `binary` 字段写绝对路径。
 
@@ -76,7 +72,7 @@ pnpm probe --config ./nodes.json --target https://www.gstatic.com/generate_204 -
 
 ```text
 HK SS 01    UP
-JP SSR 01   DOWN    curl: (28) Connection timed out after 10002 milliseconds
+SG SS 02    DOWN    curl: (28) Connection timed out after 10002 milliseconds
 ```
 
 监控模式能力:
@@ -119,47 +115,7 @@ JP SSR 01   DOWN    curl: (28) Connection timed out after 10002 milliseconds
 }
 ```
 
-`ssr` 节点:
-
-```json
-{
-  "id": "jp-ssr-01",
-  "name": "JP SSR 01",
-  "type": "ssr",
-  "server": "5.6.7.8",
-  "port": 443,
-  "method": "aes-256-cfb",
-  "password": "your-password",
-  "protocol": "auth_sha1_v4",
-  "protocolParam": "",
-  "obfs": "tls1.2_ticket_auth",
-  "obfsParam": "",
-  "udp": false,
-  "binary": "ssr-local"
-}
-```
-
-如果你在 Windows 上使用 `ssr-client.exe`，可以把 `binary` 指向该文件绝对路径:
-
-```json
-{
-  "name": "HK PRO 11",
-  "type": "ssr",
-  "server": "su813nd.cdn.ns186.com",
-  "port": 5111,
-  "cipher": "rc4-md5",
-  "password": "OriginCloud",
-  "protocol": "auth_aes128_md5",
-  "protocolParam": "36551:test23",
-  "obfs": "http_simple",
-  "obfsParam": "appleid.apple.com/8b10e36551",
-  "udp": false,
-  "binary": "C:\\\\path\\\\to\\\\ssr-client.exe"
-}
-```
-
 ## 限制
 
 - 当前不支持从订阅链接自动导入
-- `ssr-local` 参数可能因你使用的实现不同而存在差异，必要时需要调整 [src/probe.mjs](./src/probe.mjs) 里的参数映射
 - 浏览器通知依赖页面授予通知权限

@@ -1,8 +1,7 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { readFile } from 'node:fs/promises'
 import { platform } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Socket } from 'node:net'
 
@@ -145,14 +144,10 @@ function spawnLocalProxy(runtime) {
  * @param {{ debug: boolean, logger: (message: string) => void }} options
  */
 async function prepareProxyRuntime(node, localPort, options) {
-  const binary = node.binary ?? (node.type === 'ss' ? 'ss-local' : 'ssr-local')
+  const binary = node.binary ?? 'ss-local'
   const executable = basename(binary).toLowerCase()
 
   if (executable === 'sslocal' || executable === 'sslocal.exe') {
-    if (node.type !== 'ss') {
-      throw new Error('sslocal 目前只按 ss 节点方式适配，ssr 请继续使用 ssr-local')
-    }
-
     return {
       binary,
       args: [
@@ -168,34 +163,6 @@ async function prepareProxyRuntime(node, localPort, options) {
     }
   }
 
-  if (executable === 'ssr-client' || executable === 'ssr-client.exe') {
-    if (node.type !== 'ssr') {
-      throw new Error('ssr-client 仅用于 ssr 节点')
-    }
-
-    if (!node.protocol || !node.obfs) {
-      throw new Error(`SSR 节点缺少 protocol 或 obfs: ${node.name}`)
-    }
-
-    const defaultConfigPath = join(dirname(binary), 'config.json')
-    const defaultConfig = await loadSsrClientTemplate(defaultConfigPath, options.logger)
-    const configText = `${JSON.stringify(defaultConfig, null, 2)}\n`
-    const configuredPort = resolveSsrClientListenPort(defaultConfig)
-    options.logger(`using ssr-client default config at ${defaultConfigPath}`)
-
-    return {
-      binary,
-      args: [],
-      localPort: configuredPort,
-      debugConfigPath: defaultConfigPath,
-      debugConfigText: configText,
-      logOutput(stream, text) {
-        logChildOutput(options.logger, stream, text)
-      },
-      async cleanup() {},
-    }
-  }
-
   const args = [
     '-s', node.server,
     '-p', String(node.port),
@@ -203,22 +170,6 @@ async function prepareProxyRuntime(node, localPort, options) {
     '-m', node.method,
     '-k', node.password,
   ]
-
-  if (node.type === 'ssr') {
-    if (!node.protocol || !node.obfs) {
-      throw new Error(`SSR 节点缺少 protocol 或 obfs: ${node.name}`)
-    }
-
-    args.push('-O', node.protocol, '-o', node.obfs)
-
-    if (node.protocolParam) {
-      args.push('-G', node.protocolParam)
-    }
-
-    if (node.obfsParam) {
-      args.push('-g', node.obfsParam)
-    }
-  }
 
   return {
     binary,
@@ -407,36 +358,4 @@ async function canConnect(port) {
     socket.once('error', () => finish(false))
     socket.connect(port, '127.0.0.1')
   })
-}
-
-/**
- * @param {string} defaultConfigPath
- * @param {(message: string) => void} logger
- */
-async function loadSsrClientTemplate(defaultConfigPath, logger) {
-  try {
-    const raw = await readFile(defaultConfigPath, 'utf8')
-    const parsed = JSON.parse(raw)
-    logger(`loaded ssr-client default config template from ${defaultConfigPath}`)
-    return parsed && typeof parsed === 'object' ? parsed : {}
-  }
-  catch (error) {
-    logger(`default ssr-client config not used: ${formatError(error)}`)
-    return {}
-  }
-}
-
-/**
- * @param {Record<string, unknown>} config
- */
-function resolveSsrClientListenPort(config) {
-  const clientSettings = config.client_settings
-  if (clientSettings && typeof clientSettings === 'object') {
-    const listenPort = /** @type {Record<string, unknown>} */ (clientSettings).listen_port
-    if (typeof listenPort === 'number' && Number.isInteger(listenPort) && listenPort > 0) {
-      return listenPort
-    }
-  }
-
-  return 1080
 }

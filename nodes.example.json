@@ -9,19 +9,5 @@
     "password": "your-password",
     "binary": "ss-local",
     "remarks": "如果 ss-local 不在 PATH 里，可以改成绝对路径"
-  },
-  {
-    "id": "jp-ssr-01",
-    "name": "JP SSR 01",
-    "type": "ssr",
-    "server": "5.6.7.8",
-    "port": 443,
-    "method": "aes-256-cfb",
-    "password": "your-password",
-    "protocol": "auth_sha1_v4",
-    "protocolParam": "",
-    "obfs": "tls1.2_ticket_auth",
-    "obfsParam": "",
-    "binary": "ssr-local"
   }
 ]
