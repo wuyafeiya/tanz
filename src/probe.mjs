@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { platform } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { tmpdir } from 'node:os'
 import { Socket } from 'node:net'
@@ -178,22 +178,26 @@ async function prepareProxyRuntime(node, localPort, options) {
 
     const tempDir = await mkdtemp(join(tmpdir(), 'node-probe-ssr-'))
     const configPath = join(tempDir, 'config.json')
+    const defaultConfig = await loadSsrClientTemplate(binary, options.logger)
     const config = {
+      ...defaultConfig,
       password: node.password,
       method: node.method,
       protocol: node.protocol,
       protocol_param: node.protocolParam ?? '',
       obfs: node.obfs,
       obfs_param: node.obfsParam ?? '',
-      udp: node.udp ?? false,
-      idle_timeout: 300,
-      connect_timeout: 6,
-      udp_timeout: 6,
+      udp: node.udp ?? defaultConfig.udp ?? false,
+      idle_timeout: defaultConfig.idle_timeout ?? 300,
+      connect_timeout: defaultConfig.connect_timeout ?? 6,
+      udp_timeout: defaultConfig.udp_timeout ?? 6,
       server_settings: {
-        listen_address: '0.0.0.0',
+        ...(defaultConfig.server_settings ?? {}),
+        listen_address: defaultConfig.server_settings?.listen_address ?? '0.0.0.0',
         listen_port: node.port,
       },
       client_settings: {
+        ...(defaultConfig.client_settings ?? {}),
         server: node.server,
         server_port: node.port,
         listen_address: '127.0.0.1',
@@ -204,6 +208,7 @@ async function prepareProxyRuntime(node, localPort, options) {
         server_domain: 'goodsitesample.com',
         path: '/udg151df/',
         root_cert_file: '',
+        ...(defaultConfig.over_tls_settings ?? {}),
       },
     }
 
@@ -440,4 +445,23 @@ async function canConnect(port) {
     socket.once('error', () => finish(false))
     socket.connect(port, '127.0.0.1')
   })
+}
+
+/**
+ * @param {string} binaryPath
+ * @param {(message: string) => void} logger
+ */
+async function loadSsrClientTemplate(binaryPath, logger) {
+  const defaultConfigPath = join(dirname(binaryPath), 'config.json')
+
+  try {
+    const raw = await readFile(defaultConfigPath, 'utf8')
+    const parsed = JSON.parse(raw)
+    logger(`loaded ssr-client default config template from ${defaultConfigPath}`)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  }
+  catch (error) {
+    logger(`default ssr-client config not used: ${formatError(error)}`)
+    return {}
+  }
 }
