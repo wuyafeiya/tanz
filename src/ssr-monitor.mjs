@@ -73,11 +73,13 @@ export async function createSsrMonitor(nodes, options = {}) {
       }
 
       try {
+        console.log(`[SSR] 切换节点: ${node.name}`)
         await selectProxy(controllerPort, secret, groupName, node.name)
         await sleep(300)
         await runCurlProbe(socksPort, targetUrl, requestTimeoutSeconds)
         current.lastCheckedAt = new Date().toISOString()
         current.lastError = undefined
+        console.log(`[SSR] ${node.name} UP`)
 
         if (current.alertActive) {
           current.alertActive = false
@@ -87,6 +89,7 @@ export async function createSsrMonitor(nodes, options = {}) {
       catch (error) {
         current.lastCheckedAt = new Date().toISOString()
         current.lastError = formatError(error)
+        console.log(`[SSR] ${node.name} DOWN ${current.lastError}`)
 
         if (!current.alertActive) {
           current.alertActive = true
@@ -96,6 +99,7 @@ export async function createSsrMonitor(nodes, options = {}) {
     }
 
     if (!stopping) {
+      console.log(`[SSR] 等待 ${intervalSeconds} 秒后进入下一轮`)
       loopTimer = setTimeout(() => {
         void runCycle()
       }, intervalSeconds * 1000)
