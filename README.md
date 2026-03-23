@@ -78,6 +78,7 @@ SG SS 02    DOWN    curl: (28) Connection timed out after 10002 milliseconds
 监控模式能力:
 
 - 持续轮询节点状态
+- 支持把多个节点归到同一个站点下统一展示
 - 并发探测，加快大批量节点轮询速度
 - 单节点失败后会在当前轮次内快速重试，不必等下一次全局轮询
 - 本地实时仪表盘
@@ -86,6 +87,7 @@ SG SS 02    DOWN    curl: (28) Connection timed out after 10002 milliseconds
 - 页面内可一键发送 Telegram 测试消息
 - 节点掉线时可使用浏览器通知提醒
 - 连续失败达到阈值后再告警，避免短暂抖动误报
+- 只有当某个站点下所有节点都不可用时，才会触发站点级告警
 - 支持 Telegram 掉线与恢复通知
 - Telegram 通知可单独走代理，默认 `http://127.0.0.1:7897`
 
@@ -109,6 +111,8 @@ SG SS 02    DOWN    curl: (28) Connection timed out after 10002 milliseconds
 {
   "id": "hk-ss-01",
   "name": "HK SS 01",
+  "siteId": "hk",
+  "siteName": "Hong Kong",
   "type": "ss",
   "server": "1.2.3.4",
   "port": 8388,
@@ -117,6 +121,8 @@ SG SS 02    DOWN    curl: (28) Connection timed out after 10002 milliseconds
   "binary": "ss-local"
 }
 ```
+
+如果你不写 `siteId` / `siteName`，程序会默认把每个节点当成一个独立站点。
 
 ## 限制
 

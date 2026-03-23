@@ -42,6 +42,10 @@ export function createMonitor(nodes, options = {}) {
     timer: undefined,
     inFlight: false,
   }))
+  const sites = buildSiteDefinitions(nodes)
+  const siteJobs = sites.map(() => ({
+    timer: undefined,
+  }))
 
   const state = {
     startedAt: new Date().toISOString(),
@@ -65,13 +69,15 @@ export function createMonitor(nodes, options = {}) {
       nextRunAt: undefined,
     },
     summary: {
-      total: nodes.length,
+      total: sites.length,
       up: 0,
       down: 0,
     },
     nodes: nodes.map(node => ({
       id: node.id,
       name: node.name,
+      siteId: node.siteId,
+      siteName: node.siteName,
       type: node.type,
       server: node.server,
       port: node.port,
@@ -90,6 +96,23 @@ export function createMonitor(nodes, options = {}) {
       currentAttempt: 0,
       currentAttemptMax: DEFAULT_RETRY_ATTEMPTS,
       attemptStartedAt: undefined,
+    })),
+    sites: sites.map(site => ({
+      id: site.id,
+      name: site.name,
+      nodeIds: [...site.nodeIds],
+      totalNodes: site.nodeIds.length,
+      upNodes: 0,
+      downNodes: 0,
+      status: 'idle',
+      alertActive: false,
+      paused: false,
+      pauseReason: undefined,
+      escalationStage: 0,
+      nextCheckAt: undefined,
+      lastAlertAt: undefined,
+      lastOkAt: undefined,
+      lastDownAt: undefined,
     })),
     alerts: [],
     telegram: {
@@ -200,7 +223,8 @@ export function createMonitor(nodes, options = {}) {
         const current = state.nodes[index]
         current.server = updated.server
         resetNodeState(index)
-        scheduleNode(index, 0)
+        resetSiteState(current.siteId)
+        scheduleSiteNodes(current.siteId, 0)
         publish()
         respondJson(response, 200, { ok: true, node: { ...state.nodes[index] } })
         return
@@ -287,6 +311,7 @@ export function createMonitor(nodes, options = {}) {
       settings: { ...state.settings },
       cycle: { ...state.cycle },
       summary: { ...state.summary },
+      sites: state.sites.map(site => ({ ...site, nodeIds: [...site.nodeIds] })),
       nodes: state.nodes.map(node => ({ ...node })),
       alerts: state.alerts.map(alert => ({ ...alert })),
       telegram: { ...state.telegram },
@@ -310,16 +335,16 @@ export function createMonitor(nodes, options = {}) {
     let up = 0
     let down = 0
 
-    for (const node of state.nodes) {
-      if (node.status === 'up') {
+    for (const site of state.sites) {
+      if (site.status === 'up') {
         up += 1
       }
-      else if (node.status === 'down' || node.status === 'paused') {
+      else if (site.status === 'down' || site.status === 'paused') {
         down += 1
       }
 
-      if (!node.paused && node.nextRunAt) {
-        const timestamp = new Date(node.nextRunAt).getTime()
+      if (!site.paused && site.nextCheckAt) {
+        const timestamp = new Date(site.nextCheckAt).getTime()
         if (!Number.isNaN(timestamp) && timestamp < nextRunAtMs) {
           nextRunAtMs = timestamp
         }
@@ -349,11 +374,22 @@ export function createMonitor(nodes, options = {}) {
     clearTimeout(nodeJobs[index].timer)
     nodeJobs[index].timer = undefined
     state.nodes[index].nextRunAt = undefined
+    updateSiteNextCheck(state.nodes[index].siteId)
+  }
+
+  function clearSiteTimer(siteId) {
+    const siteIndex = getSiteIndex(siteId)
+    if (siteIndex < 0) {
+      return
+    }
+    clearTimeout(siteJobs[siteIndex].timer)
+    siteJobs[siteIndex].timer = undefined
   }
 
   function scheduleNode(index, delayMs) {
     const current = state.nodes[index]
-    if (current.paused) {
+    const site = getSiteState(current.siteId)
+    if (current.paused || site?.paused) {
       clearNodeTimer(index)
       return
     }
@@ -361,6 +397,7 @@ export function createMonitor(nodes, options = {}) {
     clearNodeTimer(index)
     const runAtMs = Date.now() + delayMs
     current.nextRunAt = new Date(runAtMs).toISOString()
+    updateSiteNextCheck(current.siteId)
     nodeJobs[index].timer = setTimeout(() => {
       void runNodeProbe(index, false)
     }, delayMs)
@@ -368,10 +405,9 @@ export function createMonitor(nodes, options = {}) {
 
   function rescheduleActiveNodes(delayMs) {
     for (let index = 0; index < state.nodes.length; index += 1) {
-      if (nodeJobs[index].inFlight || state.nodes[index].paused) {
-        continue
-      }
-      if (state.nodes[index].alertActive && state.nodes[index].escalationStage > 0) {
+      const current = state.nodes[index]
+      const site = getSiteState(current.siteId)
+      if (nodeJobs[index].inFlight || current.paused || site?.paused) {
         continue
       }
       scheduleNode(index, delayMs)
@@ -379,22 +415,42 @@ export function createMonitor(nodes, options = {}) {
   }
 
   function triggerImmediateProbeAll() {
-    for (let index = 0; index < state.nodes.length; index += 1) {
+    for (const site of state.sites) {
+      resetSiteState(site.id)
+      scheduleSiteNodes(site.id, 0)
+    }
+    publish()
+  }
+
+  function scheduleSiteNodes(siteId, delayMs) {
+    for (const index of getSiteNodeIndexes(siteId)) {
       if (nodeJobs[index].inFlight) {
         continue
       }
-
-      if (state.nodes[index].paused) {
-        state.nodes[index].paused = false
-        state.nodes[index].pauseReason = undefined
-        state.nodes[index].alertActive = false
-        state.nodes[index].consecutiveFailures = 0
-        state.nodes[index].escalationStage = 0
-      }
-
-      scheduleNode(index, 0)
+      scheduleNode(index, delayMs)
     }
-    publish()
+    updateSiteNextCheck(siteId)
+  }
+
+  function updateSiteNextCheck(siteId) {
+    const site = getSiteState(siteId)
+    if (!site) {
+      return
+    }
+
+    let nextRunAtMs = Number.POSITIVE_INFINITY
+    for (const index of getSiteNodeIndexes(siteId)) {
+      const nextRunAt = state.nodes[index].nextRunAt
+      if (!nextRunAt) {
+        continue
+      }
+      const timestamp = new Date(nextRunAt).getTime()
+      if (!Number.isNaN(timestamp) && timestamp < nextRunAtMs) {
+        nextRunAtMs = timestamp
+      }
+    }
+
+    site.nextCheckAt = Number.isFinite(nextRunAtMs) ? new Date(nextRunAtMs).toISOString() : undefined
   }
 
   function resetNodeState(index) {
@@ -411,12 +467,54 @@ export function createMonitor(nodes, options = {}) {
     current.attemptStartedAt = undefined
   }
 
+  function resetSiteState(siteId) {
+    const site = getSiteState(siteId)
+    if (!site) {
+      return
+    }
+
+    clearSiteTimer(siteId)
+    site.alertActive = false
+    site.paused = false
+    site.pauseReason = undefined
+    site.escalationStage = 0
+    site.lastAlertAt = undefined
+    site.nextCheckAt = undefined
+
+    for (const index of getSiteNodeIndexes(siteId)) {
+      const current = state.nodes[index]
+      current.paused = false
+      current.pauseReason = undefined
+      current.alertActive = false
+    }
+  }
+
+  function getSiteIndex(siteId) {
+    return state.sites.findIndex(site => site.id === siteId)
+  }
+
+  function getSiteState(siteId) {
+    return state.sites.find(site => site.id === siteId)
+  }
+
+  function getSiteNodeIndexes(siteId) {
+    /** @type {number[]} */
+    const indexes = []
+    for (let index = 0; index < state.nodes.length; index += 1) {
+      if (state.nodes[index].siteId === siteId) {
+        indexes.push(index)
+      }
+    }
+    return indexes
+  }
+
   async function runNodeProbe(index, resumedFromPause) {
     const job = nodeJobs[index]
     const current = state.nodes[index]
     const node = nodes[index]
+    const site = getSiteState(current.siteId)
 
-    if (job.inFlight || current.paused) {
+    if (job.inFlight || current.paused || site?.paused) {
       return
     }
 
@@ -458,74 +556,14 @@ export function createMonitor(nodes, options = {}) {
         current.lastError = undefined
         current.consecutiveFailures = 0
 
-        if (current.alertActive || resumedFromPause) {
-          current.alertActive = false
-          current.paused = false
-          current.pauseReason = undefined
-          current.escalationStage = 0
-          current.lastAlertAt = result.checkedAt
-          const alert = createAlert('ok', '节点恢复', `${node.name} ${node.server}`)
-          pushAlert(alert)
-          await sendTelegramAlert(telegram, alert)
-        }
-        else if (previousStatus === 'down') {
-          pushAlert(createAlert('ok', '节点恢复', `${node.name} ${node.server}`))
-        }
-
         scheduleNode(index, intervalSeconds * 1000)
+        await evaluateSiteState(current.siteId, resumedFromPause)
         return
       }
 
       current.status = 'down'
       current.lastError = result.error
       current.consecutiveFailures += Math.max(1, result.retryAttemptsUsed ?? 1)
-
-      if (!current.alertActive && current.consecutiveFailures >= failureThreshold) {
-        current.alertActive = true
-        current.escalationStage = 1
-        current.pauseReason = '已发首次告警，20 秒后自动复测'
-        current.lastAlertAt = result.checkedAt
-        const alert = createAlert(
-          'down',
-          '节点疑似故障',
-          `${node.name} ${node.server}`,
-        )
-        pushAlert(alert)
-        await sendTelegramAlert(telegram, alert)
-        scheduleNode(index, FIRST_FAILURE_RECHECK_DELAY_MS)
-        return
-      }
-
-      if (current.alertActive && current.escalationStage === 1) {
-        current.escalationStage = 2
-        current.pauseReason = '20 秒后复测仍失败，10 秒后进行最终确认'
-        current.lastAlertAt = result.checkedAt
-        const alert = createAlert(
-          'down',
-          '节点二次尝试不通',
-          `${node.name} ${node.server}`,
-        )
-        pushAlert(alert)
-        await sendTelegramAlert(telegram, alert)
-        scheduleNode(index, SECOND_FAILURE_RECHECK_DELAY_MS)
-        return
-      }
-
-      if (current.alertActive && current.escalationStage === 2) {
-        current.status = 'paused'
-        current.paused = true
-        current.escalationStage = 3
-        current.pauseReason = '最终确认失败，节点已暂停，请改 IP 或手动立即探测恢复'
-        current.lastAlertAt = result.checkedAt
-        const alert = createAlert(
-          'down',
-          '节点故障',
-          `${node.name} ${node.server}`,
-        )
-        pushAlert(alert)
-        await sendTelegramAlert(telegram, alert)
-        return
-      }
 
       if (previousStatus === 'up' || previousStatus === 'idle') {
         pushAlert(createAlert(
@@ -536,10 +574,134 @@ export function createMonitor(nodes, options = {}) {
       }
 
       scheduleNode(index, intervalSeconds * 1000)
+      await evaluateSiteState(current.siteId, resumedFromPause)
     }
     finally {
       job.inFlight = false
       state.cycle.lastCompletedAt = new Date().toISOString()
+      publish()
+    }
+  }
+
+  async function evaluateSiteState(siteId, resumedFromPause = false) {
+    const site = getSiteState(siteId)
+    if (!site) {
+      return
+    }
+
+    const nodeIndexes = getSiteNodeIndexes(siteId)
+    const siteNodes = nodeIndexes.map(index => state.nodes[index])
+    const upNodes = siteNodes.filter(node => node.status === 'up').length
+    const downNodes = siteNodes.filter(node => node.status === 'down' || node.status === 'paused').length
+    const runningNodes = siteNodes.filter(node => node.status === 'running').length
+    const checkedNodes = siteNodes.filter(node => node.lastCheckedAt).length
+    const allDown = checkedNodes === siteNodes.length && siteNodes.length > 0 && upNodes === 0 && runningNodes === 0
+
+    site.upNodes = upNodes
+    site.downNodes = downNodes
+
+    if (site.paused) {
+      site.status = 'paused'
+    }
+    else if (runningNodes > 0) {
+      site.status = 'running'
+    }
+    else if (upNodes > 0) {
+      site.status = 'up'
+      site.lastOkAt = new Date().toISOString()
+    }
+    else if (downNodes > 0) {
+      site.status = 'down'
+      site.lastDownAt = new Date().toISOString()
+    }
+    else {
+      site.status = 'idle'
+    }
+
+    if (!allDown) {
+      const hadAlert = site.alertActive || site.paused || resumedFromPause
+      clearSiteTimer(siteId)
+      if (hadAlert) {
+        const alert = createAlert('ok', '站点恢复', site.name)
+        pushAlert(alert)
+        await sendTelegramAlert(telegram, alert)
+      }
+      resetSiteState(siteId)
+      updateSiteNextCheck(siteId)
+      return
+    }
+
+    if (!site.alertActive) {
+      site.alertActive = true
+      site.escalationStage = 1
+      site.lastAlertAt = new Date().toISOString()
+      site.pauseReason = '站点下所有节点均不可用，20 秒后自动复测'
+      const alert = createAlert('down', '站点疑似故障', site.name)
+      pushAlert(alert)
+      await sendTelegramAlert(telegram, alert)
+      scheduleSiteConfirmation(siteId, FIRST_FAILURE_RECHECK_DELAY_MS)
+      return
+    }
+  }
+
+  function scheduleSiteConfirmation(siteId, delayMs) {
+    const site = getSiteState(siteId)
+    const siteIndex = getSiteIndex(siteId)
+    if (!site || siteIndex < 0) {
+      return
+    }
+
+    clearSiteTimer(siteId)
+    const runAt = new Date(Date.now() + delayMs).toISOString()
+    site.nextCheckAt = runAt
+    siteJobs[siteIndex].timer = setTimeout(() => {
+      void confirmSiteFailure(siteId)
+    }, delayMs)
+  }
+
+  async function confirmSiteFailure(siteId) {
+    const site = getSiteState(siteId)
+    if (!site || site.paused) {
+      return
+    }
+
+    const nodeIndexes = getSiteNodeIndexes(siteId)
+    const siteNodes = nodeIndexes.map(index => state.nodes[index])
+    const upNodes = siteNodes.filter(node => node.status === 'up').length
+    const runningNodes = siteNodes.filter(node => node.status === 'running').length
+    const checkedNodes = siteNodes.filter(node => node.lastCheckedAt).length
+    const allDown = checkedNodes === siteNodes.length && siteNodes.length > 0 && upNodes === 0 && runningNodes === 0
+
+    if (!allDown) {
+      await evaluateSiteState(siteId)
+      publish()
+      return
+    }
+
+    if (site.escalationStage === 1) {
+      site.escalationStage = 2
+      site.lastAlertAt = new Date().toISOString()
+      site.pauseReason = '20 秒后复测仍失败，10 秒后进行最终确认'
+      const alert = createAlert('down', '站点二次尝试不通', site.name)
+      pushAlert(alert)
+      await sendTelegramAlert(telegram, alert)
+      scheduleSiteConfirmation(siteId, SECOND_FAILURE_RECHECK_DELAY_MS)
+      publish()
+      return
+    }
+
+    if (site.escalationStage === 2) {
+      site.escalationStage = 3
+      site.paused = true
+      site.status = 'paused'
+      site.lastAlertAt = new Date().toISOString()
+      site.pauseReason = '最终确认失败，站点已暂停，请修改节点或手动立即探测恢复'
+      for (const index of nodeIndexes) {
+        clearNodeTimer(index)
+      }
+      const alert = createAlert('down', '站点故障', site.name)
+      pushAlert(alert)
+      await sendTelegramAlert(telegram, alert)
       publish()
     }
   }
@@ -744,7 +906,11 @@ function maskChatId(value) {
 
 function buildTelegramMessage(alert) {
   if (
-    alert.title === '节点疑似故障'
+    alert.title === '站点疑似故障'
+    || alert.title === '站点二次尝试不通'
+    || alert.title === '站点故障'
+    || alert.title === '站点恢复'
+    || alert.title === '节点疑似故障'
     || alert.title === '节点二次尝试不通'
     || alert.title === '节点故障'
     || alert.title === '节点恢复'
@@ -779,4 +945,27 @@ function formatChinaTime(value) {
   const parts = formatter.formatToParts(date)
   const map = Object.fromEntries(parts.map(part => [part.type, part.value]))
   return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`
+}
+
+/**
+ * @param {ProbeNode[]} nodes
+ */
+function buildSiteDefinitions(nodes) {
+  const map = new Map()
+
+  for (const node of nodes) {
+    const existing = map.get(node.siteId)
+    if (existing) {
+      existing.nodeIds.push(node.id)
+      continue
+    }
+
+    map.set(node.siteId, {
+      id: node.siteId,
+      name: node.siteName,
+      nodeIds: [node.id],
+    })
+  }
+
+  return [...map.values()]
 }
