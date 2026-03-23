@@ -21,6 +21,7 @@ const DEFAULT_MIHOMO_BINARY = process.env.MIHOMO_BINARY ?? 'mihomo'
 const DEFAULT_TELEGRAM_PROXY = process.env.TELEGRAM_PROXY ?? 'http://127.0.0.1:7897'
 const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_PORT = 3466
+const DEFAULT_SITE_NAME = 'origin'
 
 /**
  * @param {SsrNode[]} nodes
@@ -52,6 +53,7 @@ export async function createSsrMonitor(nodes, options = {}) {
     status: 'idle',
     resolvedIp: undefined,
     lastResolvedIp: undefined,
+    lastProbeSeconds: undefined,
     lastError: undefined,
     lastCheckedAt: undefined,
   }))
@@ -235,22 +237,24 @@ export async function createSsrMonitor(nodes, options = {}) {
         current.lastCheckedAt = new Date().toISOString()
         current.lastError = undefined
         current.status = 'up'
+        current.lastProbeSeconds = Number(probe.timeTotal)
         console.log(`[SSR] ${node.name} UP total=${probe.timeTotal}s connect=${probe.timeConnect}s starttransfer=${probe.timeStartTransfer}s remote=${node.server}:${node.port}`)
 
         if (current.alertActive) {
           current.alertActive = false
-          await sendTelegramAlert(telegram, `✅ SSR 节点恢复\n${buildNodeAlertLabel(node, current)}`)
+          await sendTelegramAlert(telegram, `✅ 站点恢复\n${buildNodeAlertLabel(node, current)}`)
         }
       }
       catch (error) {
         current.lastCheckedAt = new Date().toISOString()
         current.lastError = formatError(error)
         current.status = 'down'
+        current.lastProbeSeconds = undefined
         console.log(`[SSR] ${node.name} DOWN ${current.lastError}`)
 
         if (!current.alertActive) {
           current.alertActive = true
-          await sendTelegramAlert(telegram, `⚠️ SSR 节点疑似故障\n${buildNodeAlertLabel(node, current)}`)
+          await sendTelegramAlert(telegram, `⚠️ 站点疑似故障\n${buildNodeAlertLabel(node, current)}`)
         }
       }
     }
@@ -562,7 +566,7 @@ async function resolveServerIp(server) {
 }
 
 function buildNodeAlertLabel(node, current) {
-  return `${node.name}-${current.lastResolvedIp ?? current.resolvedIp ?? node.server}`
+  return `${DEFAULT_SITE_NAME}-${current.lastResolvedIp ?? current.resolvedIp ?? node.server}`
 }
 
 async function readJsonBody(request) {
@@ -679,6 +683,7 @@ function renderSsrDashboardHtml() {
               <h2>\${node.name}</h2>
               <div class="meta">\${node.server}:\${node.port}</div>
               <div class="meta">当前解析 IP：\${node.resolvedIp || node.lastResolvedIp || '-'}</div>
+              <div class="meta">检测耗时：\${typeof node.lastProbeSeconds === 'number' ? node.lastProbeSeconds.toFixed(3) + ' 秒' : '-'}</div>
               <div class="meta">最后检测：\${formatDateTime(node.lastCheckedAt)}</div>
               <div class="meta">\${node.lastError ? '最近错误：' + node.lastError : '最近一次检测正常'}</div>
               <div class="server-form">
