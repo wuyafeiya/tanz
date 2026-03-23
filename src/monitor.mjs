@@ -10,15 +10,13 @@ import { probeNode } from './probe.mjs'
 
 const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_PORT = 3456
-const DEFAULT_INTERVAL_SECONDS = 10
+const DEFAULT_INTERVAL_SECONDS = 6
 const DEFAULT_CONCURRENCY = 4
 const DEFAULT_FAILURE_THRESHOLD = 3
 const DEFAULT_RETRY_ATTEMPTS = 3
 const DEFAULT_RETRY_DELAY_MS = 800
 const DEFAULT_ATTEMPT_STARTUP_TIMEOUT_MS = 2000
 const DEFAULT_ATTEMPT_REQUEST_TIMEOUT_SECONDS = 8
-const FIRST_FAILURE_RECHECK_DELAY_MS = 20_000
-const SECOND_FAILURE_RECHECK_DELAY_MS = 10_000
 const MAX_ALERTS = 30
 
 /**
@@ -662,8 +660,7 @@ export function createMonitor(nodes, options = {}) {
     }
 
     if (!allDown) {
-      const hadAlert = site.alertActive || site.paused || resumedFromPause
-      clearSiteTimer(siteId)
+      const hadAlert = site.alertActive || resumedFromPause
       if (hadAlert) {
         const alert = createAlert('ok', '站点恢复', site.name)
         pushAlert(alert)
@@ -676,77 +673,13 @@ export function createMonitor(nodes, options = {}) {
 
     if (!site.alertActive) {
       site.alertActive = true
-      site.escalationStage = 1
+      site.escalationStage = 0
       site.lastAlertAt = new Date().toISOString()
-      site.pauseReason = '站点下所有节点均不可用，20 秒后自动复测'
+      site.pauseReason = '站点当前全部节点不可用，继续正常轮询等待恢复'
       const alert = createAlert('down', '站点疑似故障', site.name)
       pushAlert(alert)
       await sendTelegramAlert(telegram, alert)
-      scheduleSiteConfirmation(siteId, FIRST_FAILURE_RECHECK_DELAY_MS)
       return
-    }
-  }
-
-  function scheduleSiteConfirmation(siteId, delayMs) {
-    const site = getSiteState(siteId)
-    const siteIndex = getSiteIndex(siteId)
-    if (!site || siteIndex < 0) {
-      return
-    }
-
-    clearSiteTimer(siteId)
-    const runAt = new Date(Date.now() + delayMs).toISOString()
-    site.nextCheckAt = runAt
-    siteJobs[siteIndex].timer = setTimeout(() => {
-      void confirmSiteFailure(siteId)
-    }, delayMs)
-  }
-
-  async function confirmSiteFailure(siteId) {
-    const site = getSiteState(siteId)
-    if (!site || site.paused) {
-      return
-    }
-
-    const nodeIndexes = getSiteNodeIndexes(siteId)
-    const siteNodes = nodeIndexes.map(index => state.nodes[index])
-    const upNodes = siteNodes.filter(node => node.status === 'up').length
-    const runningNodes = siteNodes.filter(node => node.status === 'running').length
-    const checkedNodes = siteNodes.filter(node => node.lastCheckedAt).length
-    const allDown = checkedNodes === siteNodes.length && siteNodes.length > 0 && upNodes === 0 && runningNodes === 0
-
-    if (!allDown) {
-      await evaluateSiteState(siteId)
-      maybeScheduleRegularSiteCycle(siteId)
-      publish()
-      return
-    }
-
-    if (site.escalationStage === 1) {
-      site.escalationStage = 2
-      site.lastAlertAt = new Date().toISOString()
-      site.pauseReason = '20 秒后复测仍失败，10 秒后进行最终确认'
-      const alert = createAlert('down', '站点二次尝试不通', site.name)
-      pushAlert(alert)
-      await sendTelegramAlert(telegram, alert)
-      scheduleSiteConfirmation(siteId, SECOND_FAILURE_RECHECK_DELAY_MS)
-      publish()
-      return
-    }
-
-    if (site.escalationStage === 2) {
-      site.escalationStage = 3
-      site.paused = true
-      site.status = 'paused'
-      site.lastAlertAt = new Date().toISOString()
-      site.pauseReason = '最终确认失败，站点已暂停，请修改节点或手动立即探测恢复'
-      for (const index of nodeIndexes) {
-        clearNodeTimer(index)
-      }
-      const alert = createAlert('down', '站点故障', site.name)
-      pushAlert(alert)
-      await sendTelegramAlert(telegram, alert)
-      publish()
     }
   }
 
@@ -757,7 +690,7 @@ export function createMonitor(nodes, options = {}) {
 
   function maybeScheduleRegularSiteCycle(siteId) {
     const site = getSiteState(siteId)
-    if (!site || site.paused || site.alertActive) {
+    if (!site || site.paused) {
       return
     }
 

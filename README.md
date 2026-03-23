@@ -38,13 +38,13 @@ pnpm probe --config ./nodes.json
 启动持续监控和本地仪表盘:
 
 ```bash
-pnpm monitor --config ./nodes.json --interval 10 --port 3456
+pnpm monitor --config ./nodes.json --interval 6 --port 3456
 ```
 
 启用并发探测、失败阈值去抖和 Telegram 通知:
 
 ```bash
-pnpm monitor --config ./nodes.json --interval 10 --concurrency 8 --failure-threshold 3 --telegram-bot-token <token> --telegram-chat-id <chatId>
+pnpm monitor --config ./nodes.json --interval 6 --concurrency 8 --failure-threshold 3 --telegram-bot-token <token> --telegram-chat-id <chatId>
 ```
 
 也可以通过环境变量提供 Telegram 配置:
@@ -99,9 +99,9 @@ SG SS 02    DOWN    curl: (28) Connection timed out after 10002 milliseconds
 - 不区分首次和重试，每次单独尝试默认都是 2s 启动超时和 8s 请求超时
 - 每个节点面板会实时显示当前尝试次数和当前秒表
 - 最终结果才会进入本轮状态判断与告警逻辑
-- 达到告警阈值后会先发送首次告警，20 秒后自动复测
-- 若 20 秒后的复测仍失败，会发送第二次告警，10 秒后进行最终确认
-- 最终确认仍失败时，节点才会被判定为故障并暂停轮询
+- 当某个站点下所有节点都不可用时，会发送一次故障通知
+- 故障通知发出后不会暂停站点，仍然继续按正常频率轮询
+- 当站点下任意节点恢复可用时，会再发送一次恢复通知
 
 ## 配置格式
 
