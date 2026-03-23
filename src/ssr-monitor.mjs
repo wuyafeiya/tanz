@@ -224,7 +224,7 @@ function buildMihomoConfig(nodes, options) {
   return [
     `mixed-port: ${options.socksPort}`,
     'allow-lan: false',
-    'mode: global',
+    'mode: rule',
     'log-level: warning',
     `external-controller: 127.0.0.1:${options.controllerPort}`,
     'secret: ""',
