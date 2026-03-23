@@ -82,6 +82,8 @@ export function createMonitor(nodes, options = {}) {
       port: node.port,
       resolvedIp: isIP(node.server) ? node.server : undefined,
       resolvedAt: isIP(node.server) ? new Date().toISOString() : undefined,
+      lastResolvedIp: isIP(node.server) ? node.server : undefined,
+      lastResolvedAt: isIP(node.server) ? new Date().toISOString() : undefined,
       resolveError: undefined,
       status: 'idle',
       consecutiveFailures: 0,
@@ -465,6 +467,8 @@ export function createMonitor(nodes, options = {}) {
     current.lastError = undefined
     current.resolvedIp = isIP(current.server) ? current.server : undefined
     current.resolvedAt = isIP(current.server) ? new Date().toISOString() : undefined
+    current.lastResolvedIp = isIP(current.server) ? current.server : current.lastResolvedIp
+    current.lastResolvedAt = isIP(current.server) ? new Date().toISOString() : current.lastResolvedAt
     current.resolveError = undefined
     current.currentAttempt = 0
     current.currentAttemptMax = state.settings.retryAttempts
@@ -593,6 +597,8 @@ export function createMonitor(nodes, options = {}) {
     if (isIP(current.server)) {
       current.resolvedIp = current.server
       current.resolvedAt = new Date().toISOString()
+      current.lastResolvedIp = current.server
+      current.lastResolvedAt = current.resolvedAt
       current.resolveError = undefined
       return
     }
@@ -602,6 +608,8 @@ export function createMonitor(nodes, options = {}) {
       const preferred = records.find(record => record.family === 4) ?? records[0]
       current.resolvedIp = preferred?.address
       current.resolvedAt = new Date().toISOString()
+      current.lastResolvedIp = preferred?.address ?? current.lastResolvedIp
+      current.lastResolvedAt = preferred?.address ? current.resolvedAt : current.lastResolvedAt
       current.resolveError = preferred ? undefined : '未解析到 IP'
     }
     catch (error) {
@@ -623,7 +631,8 @@ export function createMonitor(nodes, options = {}) {
     const downNodes = siteNodes.filter(node => node.status === 'down' || node.status === 'paused').length
     const runningNodes = siteNodes.filter(node => node.status === 'running').length
     const checkedNodes = siteNodes.filter(node => node.lastCheckedAt).length
-    const allDown = checkedNodes === siteNodes.length && siteNodes.length > 0 && upNodes === 0 && runningNodes === 0
+    const anyDown = checkedNodes === siteNodes.length && siteNodes.length > 0 && downNodes > 0 && runningNodes === 0
+    const allRecovered = checkedNodes === siteNodes.length && siteNodes.length > 0 && downNodes === 0 && runningNodes === 0
 
     site.upNodes = upNodes
     site.downNodes = downNodes
@@ -646,10 +655,10 @@ export function createMonitor(nodes, options = {}) {
       site.status = 'idle'
     }
 
-    if (!allDown) {
+    if (allRecovered) {
       const hadAlert = site.alertActive || resumedFromPause
       if (hadAlert) {
-        const alert = createAlert('ok', '站点恢复', site.name)
+        const alert = createAlert('ok', '站点恢复', buildSiteAlertMessage(site, siteNodes, 'up'))
         pushAlert(alert)
         await sendTelegramAlert(telegram, alert)
       }
@@ -658,12 +667,12 @@ export function createMonitor(nodes, options = {}) {
       return
     }
 
-    if (!site.alertActive) {
+    if (anyDown && !site.alertActive) {
       site.alertActive = true
       site.escalationStage = 0
       site.lastAlertAt = new Date().toISOString()
-      site.pauseReason = '站点当前全部节点不可用，继续正常轮询等待恢复'
-      const alert = createAlert('down', '站点疑似故障', site.name)
+      site.pauseReason = '站点内存在异常节点，继续正常轮询等待恢复'
+      const alert = createAlert('down', '站点疑似故障', buildSiteAlertMessage(site, siteNodes, 'down'))
       pushAlert(alert)
       await sendTelegramAlert(telegram, alert)
       return
@@ -723,6 +732,14 @@ function createAlert(level, title, message) {
   }
 }
 
+function buildSiteAlertMessage(site, siteNodes, mode) {
+  const targetNode = mode === 'down'
+    ? siteNodes.find(node => node.status === 'down' || node.status === 'paused') ?? siteNodes[0]
+    : siteNodes.find(node => node.status === 'up') ?? siteNodes[0]
+  const targetAddress = targetNode?.lastResolvedIp ?? targetNode?.resolvedIp ?? targetNode?.server ?? '-'
+  return `${site.name}-${targetAddress}`
+}
+
 async function sendTelegramAlert(telegram, alert) {
   if (!telegram.enabled) {
     return { responseSnippet: '' }
@@ -755,61 +772,65 @@ function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7
         text,
       })
 
-      const args = [
-        '--silent',
-        '--show-error',
-        '--header', 'content-type: application/json',
-        '--data-binary', '@-',
-        `https://api.telegram.org/bot${botToken}/sendMessage`,
-      ]
-
-      if (proxyUrl) {
-        args.unshift(proxyUrl)
-        args.unshift('--proxy')
-      }
-
-      const child = spawn('curl', args, {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      })
-
-      let stdout = ''
-      let stderr = ''
-
-      child.stdin?.end(Buffer.from(payload, 'utf8'))
-
-      child.stdout?.on('data', chunk => {
-        stdout += chunk.toString()
-      })
-
-      child.stderr?.on('data', chunk => {
-        stderr += chunk.toString()
-      })
-
-      const [code] = /** @type {[number | null, NodeJS.Signals | null]} */ (await once(child, 'exit'))
-      if (code !== 0) {
-        const error = /** @type {Error & { responseSnippet?: string }} */ (new Error(stderr.trim() || `curl exit code ${code}`))
-        error.responseSnippet = stdout.trim().slice(0, 500)
-        throw error
-      }
-
-      let response
-      try {
-        response = JSON.parse(stdout)
-      }
-      catch {
-        throw new Error('Telegram 返回了无法解析的响应')
-      }
-
-      if (!response.ok) {
-        const error = /** @type {Error & { responseSnippet?: string }} */ (new Error(response.description ?? 'unknown telegram error'))
-        error.responseSnippet = stdout.trim().slice(0, 500)
-        throw error
-      }
-
-      return {
-        responseSnippet: stdout.trim().slice(0, 500),
-      }
+      return await sendTelegramRequest(botToken, proxyUrl, 'sendMessage', payload)
     },
+  }
+}
+
+async function sendTelegramRequest(botToken, proxyUrl, method, payload) {
+  const args = [
+    '--silent',
+    '--show-error',
+    '--header', 'content-type: application/json',
+    '--data-binary', '@-',
+    `https://api.telegram.org/bot${botToken}/${method}`,
+  ]
+
+  if (proxyUrl) {
+    args.unshift(proxyUrl)
+    args.unshift('--proxy')
+  }
+
+  const child = spawn('curl', args, {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+
+  let stdout = ''
+  let stderr = ''
+
+  child.stdin?.end(Buffer.from(payload, 'utf8'))
+
+  child.stdout?.on('data', chunk => {
+    stdout += chunk.toString()
+  })
+
+  child.stderr?.on('data', chunk => {
+    stderr += chunk.toString()
+  })
+
+  const [code] = /** @type {[number | null, NodeJS.Signals | null]} */ (await once(child, 'exit'))
+  if (code !== 0) {
+    const error = /** @type {Error & { responseSnippet?: string }} */ (new Error(stderr.trim() || `curl exit code ${code}`))
+    error.responseSnippet = stdout.trim().slice(0, 500)
+    throw error
+  }
+
+  let response
+  try {
+    response = JSON.parse(stdout)
+  }
+  catch {
+    throw new Error('Telegram 返回了无法解析的响应')
+  }
+
+  if (!response.ok) {
+    const error = /** @type {Error & { responseSnippet?: string }} */ (new Error(response.description ?? 'unknown telegram error'))
+    error.responseSnippet = stdout.trim().slice(0, 500)
+    throw error
+  }
+
+  return {
+    responseSnippet: stdout.trim().slice(0, 500),
   }
 }
 
@@ -907,6 +928,7 @@ function maskChatId(value) {
 }
 
 function buildTelegramMessage(alert) {
+  const title = decorateTelegramTitle(alert.title)
   if (
     alert.title === '站点疑似故障'
     || alert.title === '站点二次尝试不通'
@@ -917,14 +939,14 @@ function buildTelegramMessage(alert) {
     || alert.title === '节点故障'
     || alert.title === '节点恢复'
   ) {
-    return `${alert.title}\n${alert.message}\n${formatChinaTime(alert.at)}`
+    return `${title}\n${alert.message}\n${formatChinaTime(alert.at)}`
   }
 
   if (alert.title === 'Telegram 测试消息') {
-    return alert.title
+    return decorateTelegramTitle(alert.title)
   }
 
-  return `${alert.title}\n${alert.message}`
+  return `${title}\n${alert.message}`
 }
 
 function formatChinaTime(value) {
@@ -947,6 +969,22 @@ function formatChinaTime(value) {
   const parts = formatter.formatToParts(date)
   const map = Object.fromEntries(parts.map(part => [part.type, part.value]))
   return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`
+}
+
+function decorateTelegramTitle(title) {
+  if (title === '站点疑似故障' || title === '节点疑似故障') {
+    return `⚠️ ${title}`
+  }
+
+  if (title === '站点恢复' || title === '节点恢复') {
+    return `✅ ${title}`
+  }
+
+  if (title === 'Telegram 测试消息') {
+    return `🧪 ${title}`
+  }
+
+  return title
 }
 
 /**

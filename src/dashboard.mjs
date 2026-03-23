@@ -811,7 +811,7 @@ export function renderDashboardHtml(options) {
             const resolveText = node.resolvedIp
               ? '当前解析 IP：' + node.resolvedIp
               : node.resolveError
-                ? '域名解析失败：' + node.resolveError
+                ? '域名解析失败：' + node.resolveError + (node.lastResolvedIp ? ' · 最近成功 IP：' + node.lastResolvedIp : '')
                 : '当前解析 IP：待解析'
             const stateText = node.paused
               ? (node.pauseReason || '已暂停轮询')
