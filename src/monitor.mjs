@@ -565,7 +565,6 @@ export function createMonitor(nodes, options = {}) {
         current.lastError = undefined
         current.consecutiveFailures = 0
 
-        scheduleNode(index, intervalSeconds * 1000)
         await evaluateSiteState(current.siteId, resumedFromPause)
         return
       }
@@ -582,12 +581,12 @@ export function createMonitor(nodes, options = {}) {
         ))
       }
 
-      scheduleNode(index, intervalSeconds * 1000)
       await evaluateSiteState(current.siteId, resumedFromPause)
     }
     finally {
       job.inFlight = false
       state.cycle.lastCompletedAt = new Date().toISOString()
+      maybeScheduleRegularSiteCycle(current.siteId)
       publish()
     }
   }
@@ -705,6 +704,7 @@ export function createMonitor(nodes, options = {}) {
 
     if (!allDown) {
       await evaluateSiteState(siteId)
+      maybeScheduleRegularSiteCycle(siteId)
       publish()
       return
     }
@@ -740,6 +740,26 @@ export function createMonitor(nodes, options = {}) {
   function pushAlert(alert) {
     state.alerts.unshift(alert)
     state.alerts = state.alerts.slice(0, MAX_ALERTS)
+  }
+
+  function maybeScheduleRegularSiteCycle(siteId) {
+    const site = getSiteState(siteId)
+    if (!site || site.paused || site.alertActive) {
+      return
+    }
+
+    const nodeIndexes = getSiteNodeIndexes(siteId)
+    const hasInFlightNode = nodeIndexes.some(index => nodeJobs[index].inFlight)
+    if (hasInFlightNode) {
+      return
+    }
+
+    const hasRunningNode = nodeIndexes.some(index => state.nodes[index].status === 'running')
+    if (hasRunningNode) {
+      return
+    }
+
+    scheduleSiteNodes(siteId, intervalSeconds * 1000)
   }
 }
 
