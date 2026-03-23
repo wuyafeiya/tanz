@@ -18,6 +18,7 @@ const DEFAULT_RETRY_DELAY_MS = 800
 const DEFAULT_ATTEMPT_STARTUP_TIMEOUT_MS = 2000
 const DEFAULT_ATTEMPT_REQUEST_TIMEOUT_SECONDS = 8
 const MAX_ALERTS = 30
+const TELEGRAM_ALERT_PHOTO_URL = 'https://www.pkqcloud0.com/favicon.ico'
 
 /**
  * @typedef {import('./config.mjs').ProbeNode} ProbeNode
@@ -737,7 +738,12 @@ async function sendTelegramAlert(telegram, alert) {
     return { responseSnippet: '' }
   }
 
-  return await telegram.sendMessage(buildTelegramMessage(alert))
+  const message = buildTelegramMessage(alert)
+  if (alert.title === '站点疑似故障' || alert.title === '站点恢复') {
+    return await telegram.sendPhoto(TELEGRAM_ALERT_PHOTO_URL, message)
+  }
+
+  return await telegram.sendMessage(message)
 }
 
 function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7897') {
@@ -749,6 +755,7 @@ function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7
       botTokenHint: undefined,
       chatIdHint: undefined,
       async sendMessage() {},
+      async sendPhoto() {},
     }
   }
 
@@ -758,67 +765,80 @@ function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7
     debug: true,
     botTokenHint: maskToken(botToken),
     chatIdHint: maskChatId(chatId),
+    async sendPhoto(photoUrl, caption) {
+      const payload = JSON.stringify({
+        chat_id: chatId,
+        photo: photoUrl,
+        caption,
+      })
+
+      return await sendTelegramRequest(botToken, proxyUrl, 'sendPhoto', payload)
+    },
     async sendMessage(text) {
       const payload = JSON.stringify({
         chat_id: chatId,
         text,
       })
 
-      const args = [
-        '--silent',
-        '--show-error',
-        '--header', 'content-type: application/json',
-        '--data-binary', '@-',
-        `https://api.telegram.org/bot${botToken}/sendMessage`,
-      ]
-
-      if (proxyUrl) {
-        args.unshift(proxyUrl)
-        args.unshift('--proxy')
-      }
-
-      const child = spawn('curl', args, {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      })
-
-      let stdout = ''
-      let stderr = ''
-
-      child.stdin?.end(Buffer.from(payload, 'utf8'))
-
-      child.stdout?.on('data', chunk => {
-        stdout += chunk.toString()
-      })
-
-      child.stderr?.on('data', chunk => {
-        stderr += chunk.toString()
-      })
-
-      const [code] = /** @type {[number | null, NodeJS.Signals | null]} */ (await once(child, 'exit'))
-      if (code !== 0) {
-        const error = /** @type {Error & { responseSnippet?: string }} */ (new Error(stderr.trim() || `curl exit code ${code}`))
-        error.responseSnippet = stdout.trim().slice(0, 500)
-        throw error
-      }
-
-      let response
-      try {
-        response = JSON.parse(stdout)
-      }
-      catch {
-        throw new Error('Telegram 返回了无法解析的响应')
-      }
-
-      if (!response.ok) {
-        const error = /** @type {Error & { responseSnippet?: string }} */ (new Error(response.description ?? 'unknown telegram error'))
-        error.responseSnippet = stdout.trim().slice(0, 500)
-        throw error
-      }
-
-      return {
-        responseSnippet: stdout.trim().slice(0, 500),
-      }
+      return await sendTelegramRequest(botToken, proxyUrl, 'sendMessage', payload)
     },
+  }
+}
+
+async function sendTelegramRequest(botToken, proxyUrl, method, payload) {
+  const args = [
+    '--silent',
+    '--show-error',
+    '--header', 'content-type: application/json',
+    '--data-binary', '@-',
+    `https://api.telegram.org/bot${botToken}/${method}`,
+  ]
+
+  if (proxyUrl) {
+    args.unshift(proxyUrl)
+    args.unshift('--proxy')
+  }
+
+  const child = spawn('curl', args, {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+
+  let stdout = ''
+  let stderr = ''
+
+  child.stdin?.end(Buffer.from(payload, 'utf8'))
+
+  child.stdout?.on('data', chunk => {
+    stdout += chunk.toString()
+  })
+
+  child.stderr?.on('data', chunk => {
+    stderr += chunk.toString()
+  })
+
+  const [code] = /** @type {[number | null, NodeJS.Signals | null]} */ (await once(child, 'exit'))
+  if (code !== 0) {
+    const error = /** @type {Error & { responseSnippet?: string }} */ (new Error(stderr.trim() || `curl exit code ${code}`))
+    error.responseSnippet = stdout.trim().slice(0, 500)
+    throw error
+  }
+
+  let response
+  try {
+    response = JSON.parse(stdout)
+  }
+  catch {
+    throw new Error('Telegram 返回了无法解析的响应')
+  }
+
+  if (!response.ok) {
+    const error = /** @type {Error & { responseSnippet?: string }} */ (new Error(response.description ?? 'unknown telegram error'))
+    error.responseSnippet = stdout.trim().slice(0, 500)
+    throw error
+  }
+
+  return {
+    responseSnippet: stdout.trim().slice(0, 500),
   }
 }
 
