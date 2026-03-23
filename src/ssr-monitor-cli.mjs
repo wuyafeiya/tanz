@@ -64,7 +64,7 @@ function parseArgs(argv) {
     config: 'ssr-nodes.json',
     host: '127.0.0.1',
     port: 3466,
-    intervalSeconds: 15,
+    intervalSeconds: 5,
     requestTimeoutSeconds: 8,
     targetUrl: 'https://www.gstatic.com/generate_204',
     mihomoBinary: process.env.MIHOMO_BINARY ?? 'mihomo',
