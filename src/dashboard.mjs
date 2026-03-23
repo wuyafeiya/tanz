@@ -520,6 +520,7 @@ export function renderDashboardHtml(options) {
         <article class="stat"><strong id="count-total">0</strong><span>总站点数</span></article>
         <article class="stat"><strong id="count-up">0</strong><span>当前可用站点</span></article>
         <article class="stat"><strong id="count-down">0</strong><span>当前不可用站点</span></article>
+        <article class="stat"><strong id="cycle-duration">-</strong><span>整轮耗时</span></article>
         <article class="stat"><strong id="next-run">-</strong><span>下次轮询</span></article>
       </section>
 
@@ -563,6 +564,7 @@ export function renderDashboardHtml(options) {
       const countTotal = document.getElementById('count-total')
       const countUp = document.getElementById('count-up')
       const countDown = document.getElementById('count-down')
+      const cycleDuration = document.getElementById('cycle-duration')
       const nextRun = document.getElementById('next-run')
       const footerNote = document.getElementById('footer-note')
       const alertMeta = document.getElementById('alert-meta')
@@ -877,6 +879,7 @@ export function renderDashboardHtml(options) {
         countTotal.textContent = String(summary.total)
         countUp.textContent = String(summary.up)
         countDown.textContent = String(summary.down)
+        cycleDuration.textContent = cycle.lastDurationMs ? (formatDurationSeconds(cycle.lastDurationMs) + ' 秒') : '-'
         renderNextRun()
         cycleMeta.textContent = cycle.running
           ? '当前正在执行一轮探测…'

@@ -68,6 +68,7 @@ export function createMonitor(nodes, options = {}) {
       running: false,
       lastStartedAt: undefined,
       lastCompletedAt: undefined,
+      lastDurationMs: undefined,
       nextRunAt: undefined,
     },
     summary: {
@@ -334,7 +335,17 @@ export function createMonitor(nodes, options = {}) {
   }
 
   function syncGlobalState() {
-    state.cycle.running = nodeJobs.some(job => job.inFlight)
+    const running = nodeJobs.some(job => job.inFlight)
+    const wasRunning = state.cycle.running
+    state.cycle.running = running
+
+    if (!running && wasRunning && state.cycle.lastStartedAt && state.cycle.lastCompletedAt) {
+      const startedAt = new Date(state.cycle.lastStartedAt).getTime()
+      const completedAt = new Date(state.cycle.lastCompletedAt).getTime()
+      if (!Number.isNaN(startedAt) && !Number.isNaN(completedAt) && completedAt >= startedAt) {
+        state.cycle.lastDurationMs = completedAt - startedAt
+      }
+    }
 
     let nextRunAtMs = Number.POSITIVE_INFINITY
     let up = 0
@@ -528,7 +539,9 @@ export function createMonitor(nodes, options = {}) {
 
     clearNodeTimer(index)
     job.inFlight = true
-    state.cycle.lastStartedAt = new Date().toISOString()
+    if (!state.cycle.running) {
+      state.cycle.lastStartedAt = new Date().toISOString()
+    }
     publish()
 
     try {
