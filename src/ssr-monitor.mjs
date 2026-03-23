@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -30,7 +29,7 @@ export async function createSsrMonitor(nodes, options = {}) {
 
   const socksPort = await getFreePort()
   const controllerPort = await getFreePort()
-  const secret = randomUUID()
+  const secret = ''
   const tempDir = await mkdtemp(join(tmpdir(), 'ssr-monitor-'))
   const configPath = join(tempDir, 'mihomo-ssr.yaml')
   const groupName = 'SSR'
@@ -152,7 +151,7 @@ function buildMihomoConfig(nodes, options) {
     'mode: global',
     'log-level: warning',
     `external-controller: 127.0.0.1:${options.controllerPort}`,
-    `secret: "${options.secret}"`,
+    'secret: ""',
     'dns:',
     '  enable: true',
     '  ipv6: false',
@@ -196,8 +195,12 @@ async function apiRequest(controllerPort, secret, method, path, body) {
     '--silent',
     '--show-error',
     '--request', method,
-    '--header', `Authorization: Bearer ${secret}`,
+    '--write-out', '\n%{http_code}',
   ]
+
+  if (secret) {
+    args.push('--header', `Authorization: Bearer ${secret}`)
+  }
 
   if (body !== undefined) {
     args.push('--header', 'content-type: application/json', '--data-binary', JSON.stringify(body))
@@ -223,7 +226,16 @@ async function apiRequest(controllerPort, secret, method, path, body) {
     throw new Error(stderr.trim() || `curl exit code ${code}`)
   }
 
-  return stdout
+  const output = stdout.trimEnd()
+  const splitIndex = output.lastIndexOf('\n')
+  const responseBody = splitIndex >= 0 ? output.slice(0, splitIndex) : output
+  const statusCode = Number(splitIndex >= 0 ? output.slice(splitIndex + 1) : '0')
+
+  if (!Number.isInteger(statusCode) || statusCode < 200 || statusCode >= 300) {
+    throw new Error(responseBody || `HTTP ${statusCode}`)
+  }
+
+  return responseBody
 }
 
 async function runCurlProbe(socksPort, targetUrl, timeoutSeconds) {
