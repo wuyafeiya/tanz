@@ -164,7 +164,7 @@ http://127.0.0.1:3466
 常用参数：
 
 ```bash
-pnpm ssr-monitor --config ./ssr-nodes.json --mihomo-binary /path/to/mihomo --interval 15 --port 3466
+pnpm ssr-monitor --config ./ssr-nodes.json --mihomo-binary /path/to/mihomo --interval 5 --port 3466
 ```
 
 最小 SSR 配置示例见 [ssr-nodes.example.json](./ssr-nodes.example.json)。

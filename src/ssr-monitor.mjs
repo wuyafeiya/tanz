@@ -14,7 +14,7 @@ import { saveSsrNodes } from './ssr-config.mjs'
  * @typedef {import('./ssr-config.mjs').SsrNode} SsrNode
  */
 
-const DEFAULT_INTERVAL_SECONDS = 15
+const DEFAULT_INTERVAL_SECONDS = 5
 const DEFAULT_REQUEST_TIMEOUT_SECONDS = 8
 const DEFAULT_TARGET_URL = 'https://www.gstatic.com/generate_204'
 const DEFAULT_MIHOMO_BINARY = process.env.MIHOMO_BINARY ?? 'mihomo'
