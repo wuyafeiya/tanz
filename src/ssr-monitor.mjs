@@ -117,14 +117,14 @@ export async function createSsrMonitor(nodes, options = {}) {
 
       try {
         currentNodeName = node.name
-        console.log(`[SSR] 切换节点: ${node.name}`)
+        console.log(`[SSR] 切换节点: ${node.name} -> ${node.server}:${node.port}`)
         await selectProxy(controllerPort, secret, groupName, node.name)
         await sleep(300)
-        await runCurlProbe(socksPort, targetUrl, requestTimeoutSeconds)
+        const probe = await runCurlProbe(socksPort, targetUrl, requestTimeoutSeconds)
         current.lastCheckedAt = new Date().toISOString()
         current.lastError = undefined
         current.status = 'up'
-        console.log(`[SSR] ${node.name} UP`)
+        console.log(`[SSR] ${node.name} UP total=${probe.timeTotal}s connect=${probe.timeConnect}s starttransfer=${probe.timeStartTransfer}s remote=${node.server}:${node.port}`)
 
         if (current.alertActive) {
           current.alertActive = false
@@ -172,6 +172,9 @@ export async function createSsrMonitor(nodes, options = {}) {
       })
 
       void runCycle()
+      for (const node of nodes) {
+        console.log(`[SSR] 已加载节点: ${node.name} -> ${node.server}:${node.port}`)
+      }
       return {
         intervalSeconds,
         requestTimeoutSeconds,
@@ -319,6 +322,7 @@ async function runCurlProbe(socksPort, targetUrl, timeoutSeconds) {
     '--output', process.platform === 'win32' ? 'NUL' : '/dev/null',
     '--proxy', `socks5h://127.0.0.1:${socksPort}`,
     '--max-time', String(timeoutSeconds),
+    '--write-out', '\n%{time_total}|%{time_connect}|%{time_starttransfer}',
     targetUrl,
   ]
 
@@ -326,7 +330,11 @@ async function runCurlProbe(socksPort, targetUrl, timeoutSeconds) {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
+  let stdout = ''
   let stderr = ''
+  child.stdout?.on('data', chunk => {
+    stdout += chunk.toString()
+  })
   child.stderr?.on('data', chunk => {
     stderr += chunk.toString()
   })
@@ -334,6 +342,14 @@ async function runCurlProbe(socksPort, targetUrl, timeoutSeconds) {
   const [code] = /** @type {[number | null, NodeJS.Signals | null]} */ (await once(child, 'exit'))
   if (code !== 0) {
     throw new Error(stderr.trim() || `curl exit code ${code}`)
+  }
+
+  const line = stdout.trim().split('\n').at(-1) ?? ''
+  const [timeTotal, timeConnect, timeStartTransfer] = line.split('|')
+  return {
+    timeTotal: timeTotal || '0',
+    timeConnect: timeConnect || '0',
+    timeStartTransfer: timeStartTransfer || '0',
   }
 }
 
