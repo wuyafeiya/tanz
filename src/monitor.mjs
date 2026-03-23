@@ -18,7 +18,6 @@ const DEFAULT_RETRY_DELAY_MS = 800
 const DEFAULT_ATTEMPT_STARTUP_TIMEOUT_MS = 2000
 const DEFAULT_ATTEMPT_REQUEST_TIMEOUT_SECONDS = 8
 const MAX_ALERTS = 30
-const TELEGRAM_ALERT_PHOTO_URL = 'https://www.pkqcloud0.com/favicon.ico'
 
 /**
  * @typedef {import('./config.mjs').ProbeNode} ProbeNode
@@ -738,12 +737,7 @@ async function sendTelegramAlert(telegram, alert) {
     return { responseSnippet: '' }
   }
 
-  const message = buildTelegramMessage(alert)
-  if (alert.title === '站点疑似故障' || alert.title === '站点恢复') {
-    return await telegram.sendPhoto(TELEGRAM_ALERT_PHOTO_URL, message)
-  }
-
-  return await telegram.sendMessage(message)
+  return await telegram.sendMessage(buildTelegramMessage(alert))
 }
 
 function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7897') {
@@ -755,7 +749,6 @@ function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7
       botTokenHint: undefined,
       chatIdHint: undefined,
       async sendMessage() {},
-      async sendPhoto() {},
     }
   }
 
@@ -765,15 +758,6 @@ function createTelegramNotifier(botToken, chatId, proxyUrl = 'http://127.0.0.1:7
     debug: true,
     botTokenHint: maskToken(botToken),
     chatIdHint: maskChatId(chatId),
-    async sendPhoto(photoUrl, caption) {
-      const payload = JSON.stringify({
-        chat_id: chatId,
-        photo: photoUrl,
-        caption,
-      })
-
-      return await sendTelegramRequest(botToken, proxyUrl, 'sendPhoto', payload)
-    },
     async sendMessage(text) {
       const payload = JSON.stringify({
         chat_id: chatId,
@@ -936,6 +920,7 @@ function maskChatId(value) {
 }
 
 function buildTelegramMessage(alert) {
+  const title = decorateTelegramTitle(alert.title)
   if (
     alert.title === '站点疑似故障'
     || alert.title === '站点二次尝试不通'
@@ -946,14 +931,14 @@ function buildTelegramMessage(alert) {
     || alert.title === '节点故障'
     || alert.title === '节点恢复'
   ) {
-    return `${alert.title}\n${alert.message}\n${formatChinaTime(alert.at)}`
+    return `${title}\n${alert.message}\n${formatChinaTime(alert.at)}`
   }
 
   if (alert.title === 'Telegram 测试消息') {
-    return alert.title
+    return decorateTelegramTitle(alert.title)
   }
 
-  return `${alert.title}\n${alert.message}`
+  return `${title}\n${alert.message}`
 }
 
 function formatChinaTime(value) {
@@ -976,6 +961,22 @@ function formatChinaTime(value) {
   const parts = formatter.formatToParts(date)
   const map = Object.fromEntries(parts.map(part => [part.type, part.value]))
   return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`
+}
+
+function decorateTelegramTitle(title) {
+  if (title === '站点疑似故障' || title === '节点疑似故障') {
+    return `⚠️ ${title}`
+  }
+
+  if (title === '站点恢复' || title === '节点恢复') {
+    return `✅ ${title}`
+  }
+
+  if (title === 'Telegram 测试消息') {
+    return `🧪 ${title}`
+  }
+
+  return title
 }
 
 /**
