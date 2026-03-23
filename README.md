@@ -148,4 +148,23 @@ pnpm ssr-monitor --config ./ssr-nodes.json
 4. 用 `curl` 走本地 SOCKS5 端口测试目标地址
 5. 首次失败时发一次 Telegram，恢复时再发一次 Telegram
 
+默认会同时启动一个最小网页面板：
+
+```text
+http://127.0.0.1:3466
+```
+
+网页会显示：
+
+- 当前 SSR 节点状态
+- 正在检测哪个节点
+- 下一轮倒计时
+- 上次检测时间和最近错误
+
+常用参数：
+
+```bash
+pnpm ssr-monitor --config ./ssr-nodes.json --mihomo-binary /path/to/mihomo --interval 15 --port 3466
+```
+
 最小 SSR 配置示例见 [ssr-nodes.example.json](./ssr-nodes.example.json)。

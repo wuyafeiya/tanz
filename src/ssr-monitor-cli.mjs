@@ -21,6 +21,8 @@ async function main() {
     telegramBotToken: args.telegramBotToken,
     telegramChatId: args.telegramChatId,
     telegramProxy: args.telegramProxy,
+    host: args.host,
+    port: args.port,
   })
 
   const snapshot = await monitor.start()
@@ -29,6 +31,7 @@ async function main() {
   console.log(`mihomo 可执行文件: ${snapshot.mihomoBinary}`)
   console.log(`本地 SOCKS5: 127.0.0.1:${snapshot.socksPort}`)
   console.log(`控制接口: 127.0.0.1:${snapshot.controllerPort}`)
+  console.log(`网页面板: ${snapshot.dashboardOrigin}`)
   console.log(`轮询间隔: ${snapshot.intervalSeconds} 秒`)
   console.log(`请求超时: ${snapshot.requestTimeoutSeconds} 秒`)
   console.log(`目标地址: ${snapshot.targetUrl}`)
@@ -58,6 +61,8 @@ async function main() {
 function parseArgs(argv) {
   const options = {
     config: 'ssr-nodes.json',
+    host: '127.0.0.1',
+    port: 3466,
     intervalSeconds: 15,
     requestTimeoutSeconds: 8,
     targetUrl: 'https://www.gstatic.com/generate_204',
@@ -78,6 +83,14 @@ function parseArgs(argv) {
         break
       case '--interval':
         options.intervalSeconds = Number(nextValue)
+        index += 1
+        break
+      case '--host':
+        options.host = nextValue
+        index += 1
+        break
+      case '--port':
+        options.port = Number(nextValue)
         index += 1
         break
       case '--request-timeout':
@@ -123,6 +136,8 @@ function printHelp() {
 
 Options:
   --config <file>            SSR 节点配置文件
+  --host <host>              网页面板监听地址
+  --port <port>              网页面板监听端口
   --interval <sec>           轮询间隔秒数
   --request-timeout <sec>    curl 请求超时
   --target <url>             探测目标 URL
