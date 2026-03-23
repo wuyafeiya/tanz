@@ -2,3 +2,5 @@
 node_modules/
 .vscode/
 nodes.json
+node.txt
+favicon.ico
