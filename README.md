@@ -38,13 +38,13 @@ pnpm probe --config ./nodes.json
 启动持续监控和本地仪表盘:
 
 ```bash
-pnpm monitor --config ./nodes.json --interval 6 --port 3456
+pnpm monitor --config ./nodes.json --interval 8 --port 3456
 ```
 
 启用并发探测、失败阈值去抖和 Telegram 通知:
 
 ```bash
-pnpm monitor --config ./nodes.json --interval 6 --concurrency 8 --failure-threshold 3 --telegram-bot-token <token> --telegram-chat-id <chatId>
+pnpm monitor --config ./nodes.json --interval 8 --concurrency 8 --failure-threshold 3 --telegram-bot-token <token> --telegram-chat-id <chatId>
 ```
 
 也可以通过环境变量提供 Telegram 配置:
