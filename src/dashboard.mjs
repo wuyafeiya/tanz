@@ -497,7 +497,7 @@ export function renderDashboardHtml(options) {
         <div>
           <div class="eyebrow">Node Probe Monitor</div>
           <h1>代理连通性持续监控面板</h1>
-          <p class="lede">不是一次性跑完就结束，而是把每个节点的状态变化盯住。你可以在页面里调整轮询间隔、手动立即探测，并在节点掉线时收到浏览器通知。</p>
+          <p class="lede">不是一次性跑完就结束，而是把每个站点和站点下节点的状态变化盯住。你可以在页面里调整轮询间隔、手动立即探测，并在整站掉线时收到浏览器通知。</p>
         </div>
         <aside class="control-panel">
           <div class="control-grid">
@@ -517,20 +517,20 @@ export function renderDashboardHtml(options) {
       </section>
 
       <section class="status-strip" id="status-strip">
-        <article class="stat"><strong id="count-total">0</strong><span>总节点数</span></article>
-        <article class="stat"><strong id="count-up">0</strong><span>当前可用</span></article>
-        <article class="stat"><strong id="count-down">0</strong><span>当前不可用</span></article>
+        <article class="stat"><strong id="count-total">0</strong><span>总站点数</span></article>
+        <article class="stat"><strong id="count-up">0</strong><span>当前可用站点</span></article>
+        <article class="stat"><strong id="count-down">0</strong><span>当前不可用站点</span></article>
         <article class="stat"><strong id="next-run">-</strong><span>下次轮询</span></article>
       </section>
 
       <section class="layout">
         <article class="table-wrap">
           <div class="table-head">
-            <h2>节点状态</h2>
+            <h2>站点状态</h2>
             <div class="meta" id="cycle-meta">等待首轮探测…</div>
           </div>
           <div class="node-list" id="node-list"></div>
-          <div class="empty" id="node-empty" hidden>还没有节点数据。监控服务启动后会先做一轮探测，然后这里会开始展示每个节点的在线状态、最近错误和连续失败次数。</div>
+          <div class="empty" id="node-empty" hidden>还没有站点数据。监控服务启动后会先做一轮探测，然后这里会开始按站点展示节点状态、最近错误和连续失败次数。</div>
         </article>
 
         <aside class="timeline">
@@ -539,7 +539,7 @@ export function renderDashboardHtml(options) {
             <div class="meta" id="alert-meta">仅记录状态变化</div>
           </div>
           <div class="timeline-list" id="timeline-list"></div>
-          <div class="empty" id="timeline-empty">暂无状态变更。节点从可用变成不可用，或从不可用恢复时，这里会留下时间线记录。</div>
+          <div class="empty" id="timeline-empty">暂无状态变更。站点从可用变成不可用，或从不可用恢复时，这里会留下时间线记录。</div>
         </aside>
       </section>
 
@@ -570,7 +570,7 @@ export function renderDashboardHtml(options) {
       const connectionPanel = document.querySelector('.control-grid')
 
       /** @type {Map<string, boolean>} */
-      const lastNodeAlertState = new Map()
+      const lastSiteAlertState = new Map()
       /** @type {Map<string, string>} */
       const nodeServerDrafts = new Map()
       let toastTimer = null
@@ -762,55 +762,87 @@ export function renderDashboardHtml(options) {
         }
       }
 
-      function renderNodes(nodes) {
+      function renderNodes(sites, nodes) {
         nodeList.innerHTML = ''
-        nodeEmpty.hidden = nodes.length > 0
+        nodeEmpty.hidden = sites.length > 0
 
-        for (const node of nodes) {
-          const item = document.createElement('article')
-          item.className = 'node'
-          const draftServer = nodeServerDrafts.get(node.id)
-          const inputValue = draftServer !== undefined ? draftServer : node.server
+        for (const site of sites) {
+          const section = document.createElement('section')
+          section.className = 'panel'
+          const siteNodes = nodes.filter(node => node.siteId === site.id)
+          const siteStateText = site.paused
+            ? (site.pauseReason || '站点已暂停轮询')
+            : '最近恢复：' + formatDateTime(site.lastOkAt)
 
-          const errorText = node.lastError
-            ? '最近错误：' + node.lastError
-            : node.lastCheckedAt
-              ? '最近一次探测正常'
-              : '等待首轮探测'
-          const stateText = node.paused
-            ? (node.pauseReason || '已暂停轮询')
-            : '最近恢复：' + formatDateTime(node.lastOkAt)
-
-          item.innerHTML = \`
-            <div class="node-main">
-              <div class="node-title">
-                <strong>\${node.name}</strong>
-                <span class="meta">\${node.type.toUpperCase()} · \${node.server}:\${node.port}</span>
+          section.innerHTML = \`
+            <div class="panel-head">
+              <div>
+                <h2>\${site.name}</h2>
+                <p>\${site.upNodes}/\${site.totalNodes} 节点可用</p>
               </div>
-              <div class="node-sub">\${errorText}</div>
-              <div class="badges">
-                <span class="badge"><span class="dot \${nodeStatusClass(node.status)}"></span>连续失败 \${node.consecutiveFailures} 次</span>
-                <span class="badge">\${node.status === 'running' && node.attemptStartedAt ? '当前耗时' : '本轮耗时'} <span data-node-live-clock="\${node.id}">\${node.status === 'running' && node.attemptStartedAt ? formatLiveSeconds(node.attemptStartedAt) + 's' : formatDurationSeconds(node.lastDurationMs) + ' 秒'}</span></span>
-                <span class="badge">最后探测 \${formatDateTime(node.lastCheckedAt)}</span>
-                <span class="badge" data-node-attempt-label="\${node.id}">\${node.paused ? '已暂停轮询' : node.status === 'running' && node.currentAttempt > 0 ? '第 ' + node.currentAttempt + '/' + node.currentAttemptMax + ' 次尝试' : '失败即时重试 ' + (latestSnapshot?.settings?.retryAttempts ?? 3) + ' 次'}</span>
-              </div>
-              <div class="node-editor">
-                <input type="text" data-node-server-input="\${node.id}" value="\${inputValue}" spellcheck="false" />
-                <button class="secondary" data-node-server-save="\${node.id}">保存服务器地址</button>
+              <div class="status">
+                <div class="pill \${nodeStatusClass(site.status)}">\${nodeStatusLabel(site.status)}</div>
+                <small>\${siteStateText}</small>
               </div>
             </div>
-            <div class="state">
-              <div class="pill \${nodeStatusClass(node.status)}">\${nodeStatusLabel(node.status)}</div>
-              <small>\${stateText}</small>
+            <div class="badges">
+              <span class="badge"><span class="dot \${nodeStatusClass(site.status)}"></span>在线节点 \${site.upNodes}/\${site.totalNodes}</span>
+              <span class="badge">异常节点 \${site.downNodes}</span>
+              <span class="badge">下次检查 \${formatDateTime(site.nextCheckAt)}</span>
             </div>
+            <div class="site-node-list"></div>
           \`
-          nodeList.appendChild(item)
 
-          const previousAlertActive = lastNodeAlertState.get(node.id)
-          if (node.alertActive && previousAlertActive === false) {
-            notifyNodeDown(node)
+          const siteNodeList = section.querySelector('.site-node-list')
+
+          for (const node of siteNodes) {
+            const item = document.createElement('article')
+            item.className = 'node'
+            const draftServer = nodeServerDrafts.get(node.id)
+            const inputValue = draftServer !== undefined ? draftServer : node.server
+
+            const errorText = node.lastError
+              ? '最近错误：' + node.lastError
+              : node.lastCheckedAt
+                ? '最近一次探测正常'
+                : '等待首轮探测'
+            const stateText = node.paused
+              ? (node.pauseReason || '已暂停轮询')
+              : '最近恢复：' + formatDateTime(node.lastOkAt)
+
+            item.innerHTML = \`
+              <div class="node-main">
+                <div class="node-title">
+                  <strong>\${node.name}</strong>
+                  <span class="meta">\${node.type.toUpperCase()} · \${node.server}:\${node.port}</span>
+                </div>
+                <div class="node-sub">\${errorText}</div>
+                <div class="badges">
+                  <span class="badge"><span class="dot \${nodeStatusClass(node.status)}"></span>连续失败 \${node.consecutiveFailures} 次</span>
+                  <span class="badge">\${node.status === 'running' && node.attemptStartedAt ? '当前耗时' : '本轮耗时'} <span data-node-live-clock="\${node.id}">\${node.status === 'running' && node.attemptStartedAt ? formatLiveSeconds(node.attemptStartedAt) + 's' : formatDurationSeconds(node.lastDurationMs) + ' 秒'}</span></span>
+                  <span class="badge">最后探测 \${formatDateTime(node.lastCheckedAt)}</span>
+                  <span class="badge" data-node-attempt-label="\${node.id}">\${node.paused ? '已暂停轮询' : node.status === 'running' && node.currentAttempt > 0 ? '第 ' + node.currentAttempt + '/' + node.currentAttemptMax + ' 次尝试' : '失败即时重试 ' + (latestSnapshot?.settings?.retryAttempts ?? 3) + ' 次'}</span>
+                </div>
+                <div class="node-editor">
+                  <input type="text" data-node-server-input="\${node.id}" value="\${inputValue}" spellcheck="false" />
+                  <button class="secondary" data-node-server-save="\${node.id}">保存服务器地址</button>
+                </div>
+              </div>
+              <div class="state">
+                <div class="pill \${nodeStatusClass(node.status)}">\${nodeStatusLabel(node.status)}</div>
+                <small>\${stateText}</small>
+              </div>
+            \`
+            siteNodeList.appendChild(item)
           }
-          lastNodeAlertState.set(node.id, node.alertActive)
+
+          nodeList.appendChild(section)
+
+          const previousAlertActive = lastSiteAlertState.get(site.id)
+          if (site.alertActive && previousAlertActive === false) {
+            notifySiteDown(site)
+          }
+          lastSiteAlertState.set(site.id, site.alertActive)
         }
       }
 
@@ -833,7 +865,7 @@ export function renderDashboardHtml(options) {
 
       function renderState(snapshot) {
         latestSnapshot = snapshot
-        const { summary, cycle, settings, nodes, alerts, server, telegram } = snapshot
+        const { summary, cycle, settings, sites, nodes, alerts, server, telegram } = snapshot
         intervalInput.value = String(settings.intervalSeconds)
         countTotal.textContent = String(summary.total)
         countUp.textContent = String(summary.up)
@@ -842,21 +874,21 @@ export function renderDashboardHtml(options) {
         cycleMeta.textContent = cycle.running
           ? '当前正在执行一轮探测…'
           : '上次完成于 ' + formatDateTime(cycle.lastCompletedAt)
-        footerNote.textContent = '监听 ' + server.origin + ' · 目标 ' + settings.targetUrl + ' · 单次启动超时 ' + settings.startupTimeoutMs + 'ms · 单次请求超时 ' + settings.requestTimeoutSeconds + 's · 并发 ' + settings.concurrency + ' · 告警阈值 ' + settings.failureThreshold + ' 次' + (settings.telegramEnabled ? ' · Telegram 已启用' : '')
+        footerNote.textContent = '监听 ' + server.origin + ' · 目标 ' + settings.targetUrl + ' · 单次启动超时 ' + settings.startupTimeoutMs + 'ms · 单次请求超时 ' + settings.requestTimeoutSeconds + 's · 并发 ' + settings.concurrency + ' · 站点告警阈值 ' + settings.failureThreshold + ' 次' + (settings.telegramEnabled ? ' · Telegram 已启用' : '')
         renderTelegramDebug(telegram)
-        renderNodes(nodes)
+        renderNodes(sites, nodes)
         renderAlerts(alerts)
         refreshNodeLiveClocks()
       }
 
-      function notifyNodeDown(node) {
-        const message = node.name + ' 当前不可用'
+      function notifySiteDown(site) {
+        const message = site.name + ' 当前全部节点不可用'
         showToast(message)
 
         if ('Notification' in window && Notification.permission === 'granted') {
-          new Notification('节点掉线告警', {
+          new Notification('站点掉线告警', {
             body: message,
-            tag: 'node-down-' + node.id,
+            tag: 'site-down-' + site.id,
           })
         }
       }

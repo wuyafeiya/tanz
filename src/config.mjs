@@ -8,6 +8,8 @@ import { readFile, writeFile } from 'node:fs/promises'
  * @typedef {Object} ProbeNode
  * @property {string} id
  * @property {string} name
+ * @property {string} siteId
+ * @property {string} siteName
  * @property {NodeType} type
  * @property {string} server
  * @property {number} port
@@ -104,6 +106,8 @@ function validateNode(value) {
   return /** @type {ProbeNode} */ ({
     id,
     name: node.name,
+    siteId: resolveSiteId(node, id),
+    siteName: resolveSiteName(node, node.name),
     type: node.type,
     server: node.server,
     port: node.port,
@@ -119,6 +123,22 @@ function validateNode(value) {
  */
 function asOptionalText(value) {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
+}
+
+/**
+ * @param {Record<string, unknown>} node
+ * @param {string} fallback
+ */
+function resolveSiteId(node, fallback) {
+  return asOptionalText(node.siteId) ?? asOptionalText(node.site) ?? fallback
+}
+
+/**
+ * @param {Record<string, unknown>} node
+ * @param {string} fallback
+ */
+function resolveSiteName(node, fallback) {
+  return asOptionalText(node.siteName) ?? asOptionalText(node.site) ?? fallback
 }
 
 /**

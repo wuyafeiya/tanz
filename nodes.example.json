@@ -2,6 +2,8 @@
   {
     "id": "hk-ss-01",
     "name": "HK SS 01",
+    "siteId": "hk",
+    "siteName": "Hong Kong",
     "type": "ss",
     "server": "1.2.3.4",
     "port": 8388,
