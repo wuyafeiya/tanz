@@ -225,7 +225,7 @@ export function createMonitor(nodes, options = {}) {
         const current = state.nodes[index]
         current.server = updated.server
         resetNodeState(index)
-        resetSiteState(current.siteId)
+        clearSiteTimer(current.siteId)
         scheduleSiteNodes(current.siteId, 0)
         publish()
         respondJson(response, 200, { ok: true, node: { ...state.nodes[index] } })
