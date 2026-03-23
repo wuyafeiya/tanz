@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process'
+import { lookup } from 'node:dns/promises'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
+import { isIP } from 'node:net'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { updateNodeServer } from './config.mjs'
 import { renderDashboardHtml } from './dashboard.mjs'
@@ -81,6 +83,9 @@ export function createMonitor(nodes, options = {}) {
       type: node.type,
       server: node.server,
       port: node.port,
+      resolvedIp: isIP(node.server) ? node.server : undefined,
+      resolvedAt: isIP(node.server) ? new Date().toISOString() : undefined,
+      resolveError: undefined,
       status: 'idle',
       consecutiveFailures: 0,
       alertActive: false,
@@ -462,6 +467,9 @@ export function createMonitor(nodes, options = {}) {
     current.pauseReason = undefined
     current.escalationStage = 0
     current.lastError = undefined
+    current.resolvedIp = isIP(current.server) ? current.server : undefined
+    current.resolvedAt = isIP(current.server) ? new Date().toISOString() : undefined
+    current.resolveError = undefined
     current.currentAttempt = 0
     current.currentAttemptMax = state.settings.retryAttempts
     current.attemptStartedAt = undefined
@@ -524,6 +532,7 @@ export function createMonitor(nodes, options = {}) {
     publish()
 
     try {
+      await resolveNodeServer(current)
       const result = await probeNodeWithRetry(node, {
         targetUrl: state.settings.targetUrl,
         startupTimeoutMs: state.settings.startupTimeoutMs,
@@ -580,6 +589,28 @@ export function createMonitor(nodes, options = {}) {
       job.inFlight = false
       state.cycle.lastCompletedAt = new Date().toISOString()
       publish()
+    }
+  }
+
+  async function resolveNodeServer(current) {
+    if (isIP(current.server)) {
+      current.resolvedIp = current.server
+      current.resolvedAt = new Date().toISOString()
+      current.resolveError = undefined
+      return
+    }
+
+    try {
+      const records = await lookup(current.server, { all: true })
+      const preferred = records.find(record => record.family === 4) ?? records[0]
+      current.resolvedIp = preferred?.address
+      current.resolvedAt = new Date().toISOString()
+      current.resolveError = preferred ? undefined : '未解析到 IP'
+    }
+    catch (error) {
+      current.resolvedIp = undefined
+      current.resolvedAt = new Date().toISOString()
+      current.resolveError = error instanceof Error ? error.message : String(error)
     }
   }
 

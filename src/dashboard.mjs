@@ -806,6 +806,11 @@ export function renderDashboardHtml(options) {
               : node.lastCheckedAt
                 ? '最近一次探测正常'
                 : '等待首轮探测'
+            const resolveText = node.resolvedIp
+              ? '当前解析 IP：' + node.resolvedIp
+              : node.resolveError
+                ? '域名解析失败：' + node.resolveError
+                : '当前解析 IP：待解析'
             const stateText = node.paused
               ? (node.pauseReason || '已暂停轮询')
               : '最近恢复：' + formatDateTime(node.lastOkAt)
@@ -817,10 +822,12 @@ export function renderDashboardHtml(options) {
                   <span class="meta">\${node.type.toUpperCase()} · \${node.server}:\${node.port}</span>
                 </div>
                 <div class="node-sub">\${errorText}</div>
+                <div class="node-sub">\${resolveText}</div>
                 <div class="badges">
                   <span class="badge"><span class="dot \${nodeStatusClass(node.status)}"></span>连续失败 \${node.consecutiveFailures} 次</span>
                   <span class="badge">\${node.status === 'running' && node.attemptStartedAt ? '当前耗时' : '本轮耗时'} <span data-node-live-clock="\${node.id}">\${node.status === 'running' && node.attemptStartedAt ? formatLiveSeconds(node.attemptStartedAt) + 's' : formatDurationSeconds(node.lastDurationMs) + ' 秒'}</span></span>
                   <span class="badge">最后探测 \${formatDateTime(node.lastCheckedAt)}</span>
+                  <span class="badge">解析时间 \${formatDateTime(node.resolvedAt)}</span>
                   <span class="badge" data-node-attempt-label="\${node.id}">\${node.paused ? '已暂停轮询' : node.status === 'running' && node.currentAttempt > 0 ? '第 ' + node.currentAttempt + '/' + node.currentAttemptMax + ' 次尝试' : '失败即时重试 ' + (latestSnapshot?.settings?.retryAttempts ?? 3) + ' 次'}</span>
                 </div>
                 <div class="node-editor">
