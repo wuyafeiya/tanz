@@ -17,8 +17,8 @@ const DEFAULT_RETRY_ATTEMPTS = 3
 const DEFAULT_RETRY_DELAY_MS = 800
 const DEFAULT_ATTEMPT_STARTUP_TIMEOUT_MS = 2000
 const DEFAULT_ATTEMPT_REQUEST_TIMEOUT_SECONDS = 8
-const FIRST_FAILURE_RECHECK_DELAY_MS = 20_000
-const SECOND_FAILURE_RECHECK_DELAY_MS = 10_000
+const FIRST_FAILURE_RECHECK_DELAY_MS = 5_000
+const SECOND_FAILURE_RECHECK_DELAY_MS = 3_000
 const MAX_ALERTS = 30
 
 /**
@@ -115,6 +115,7 @@ export function createMonitor(nodes, options = {}) {
       paused: false,
       pauseReason: undefined,
       escalationStage: 0,
+      awaitingConfirmationResult: false,
       nextCheckAt: undefined,
       lastAlertAt: undefined,
       lastOkAt: undefined,
@@ -497,6 +498,7 @@ export function createMonitor(nodes, options = {}) {
     site.paused = false
     site.pauseReason = undefined
     site.escalationStage = 0
+    site.awaitingConfirmationResult = false
     site.lastAlertAt = undefined
     site.nextCheckAt = undefined
 
@@ -674,6 +676,36 @@ export function createMonitor(nodes, options = {}) {
       return
     }
 
+    if (site.awaitingConfirmationResult) {
+      site.awaitingConfirmationResult = false
+
+      if (site.escalationStage === 1) {
+        site.escalationStage = 2
+        site.lastAlertAt = new Date().toISOString()
+        site.pauseReason = '20 秒后复测仍失败，10 秒后进行最终确认'
+        const alert = createAlert('down', '站点二次尝试不通', site.name)
+        pushAlert(alert)
+        await sendTelegramAlert(telegram, alert)
+        scheduleSiteConfirmation(siteId, SECOND_FAILURE_RECHECK_DELAY_MS)
+        return
+      }
+
+      if (site.escalationStage === 2) {
+        site.escalationStage = 3
+        site.paused = true
+        site.status = 'paused'
+        site.lastAlertAt = new Date().toISOString()
+        site.pauseReason = '最终确认失败，站点已暂停，请修改节点或手动立即探测恢复'
+        for (const index of nodeIndexes) {
+          clearNodeTimer(index)
+        }
+        const alert = createAlert('down', '站点故障', site.name)
+        pushAlert(alert)
+        await sendTelegramAlert(telegram, alert)
+        return
+      }
+    }
+
     if (!site.alertActive) {
       site.alertActive = true
       site.escalationStage = 1
@@ -695,59 +727,24 @@ export function createMonitor(nodes, options = {}) {
     }
 
     clearSiteTimer(siteId)
+    site.awaitingConfirmationResult = false
     const runAt = new Date(Date.now() + delayMs).toISOString()
     site.nextCheckAt = runAt
     siteJobs[siteIndex].timer = setTimeout(() => {
-      void confirmSiteFailure(siteId)
+      void runSiteConfirmation(siteId)
     }, delayMs)
   }
 
-  async function confirmSiteFailure(siteId) {
+  async function runSiteConfirmation(siteId) {
     const site = getSiteState(siteId)
     if (!site || site.paused) {
       return
     }
 
-    const nodeIndexes = getSiteNodeIndexes(siteId)
-    const siteNodes = nodeIndexes.map(index => state.nodes[index])
-    const upNodes = siteNodes.filter(node => node.status === 'up').length
-    const runningNodes = siteNodes.filter(node => node.status === 'running').length
-    const checkedNodes = siteNodes.filter(node => node.lastCheckedAt).length
-    const allDown = checkedNodes === siteNodes.length && siteNodes.length > 0 && upNodes === 0 && runningNodes === 0
-
-    if (!allDown) {
-      await evaluateSiteState(siteId)
-      maybeScheduleRegularSiteCycle(siteId)
-      publish()
-      return
-    }
-
-    if (site.escalationStage === 1) {
-      site.escalationStage = 2
-      site.lastAlertAt = new Date().toISOString()
-      site.pauseReason = '20 秒后复测仍失败，10 秒后进行最终确认'
-      const alert = createAlert('down', '站点二次尝试不通', site.name)
-      pushAlert(alert)
-      await sendTelegramAlert(telegram, alert)
-      scheduleSiteConfirmation(siteId, SECOND_FAILURE_RECHECK_DELAY_MS)
-      publish()
-      return
-    }
-
-    if (site.escalationStage === 2) {
-      site.escalationStage = 3
-      site.paused = true
-      site.status = 'paused'
-      site.lastAlertAt = new Date().toISOString()
-      site.pauseReason = '最终确认失败，站点已暂停，请修改节点或手动立即探测恢复'
-      for (const index of nodeIndexes) {
-        clearNodeTimer(index)
-      }
-      const alert = createAlert('down', '站点故障', site.name)
-      pushAlert(alert)
-      await sendTelegramAlert(telegram, alert)
-      publish()
-    }
+    site.awaitingConfirmationResult = true
+    site.nextCheckAt = undefined
+    scheduleSiteNodes(siteId, 0)
+    publish()
   }
 
   function pushAlert(alert) {
