@@ -113,7 +113,6 @@ export async function createSsrMonitor(nodes, options = {}) {
       return
     }
     clearTimeout(loopTimer)
-    console.log(`[SSR] 等待 ${intervalSeconds} 秒后进入下一轮`)
     currentNodeName = undefined
     nextRunAt = new Date(Date.now() + intervalSeconds * 1000).toISOString()
     loopTimer = setTimeout(() => {
@@ -197,9 +196,6 @@ export async function createSsrMonitor(nodes, options = {}) {
       nextRunAt = undefined
       await enqueueTask(async () => {
         await restartMihomo()
-        for (const item of nodes) {
-          console.log(`[SSR] 已加载节点: ${item.name} -> ${item.server}:${item.port}`)
-        }
         await runCycle()
         scheduleNextCycle()
       })
@@ -230,7 +226,6 @@ export async function createSsrMonitor(nodes, options = {}) {
         if (current.resolvedIp) {
           current.lastResolvedIp = current.resolvedIp
         }
-        console.log(`[SSR] 切换节点: ${node.name} -> ${node.server}:${node.port}`)
         await selectProxy(controllerPort, secret, groupName, node.name)
         await sleep(300)
         const probe = await runCurlProbe(socksPort, targetUrl, requestTimeoutSeconds)
@@ -238,7 +233,6 @@ export async function createSsrMonitor(nodes, options = {}) {
         current.lastError = undefined
         current.status = 'up'
         current.lastProbeSeconds = Number(probe.timeTotal)
-        console.log(`[SSR] ${node.name} UP total=${probe.timeTotal}s connect=${probe.timeConnect}s starttransfer=${probe.timeStartTransfer}s remote=${node.server}:${node.port}`)
 
         if (current.alertActive) {
           current.alertActive = false
@@ -250,7 +244,6 @@ export async function createSsrMonitor(nodes, options = {}) {
         current.lastError = formatError(error)
         current.status = 'down'
         current.lastProbeSeconds = undefined
-        console.log(`[SSR] ${node.name} DOWN ${current.lastError}`)
 
         if (!current.alertActive) {
           current.alertActive = true
