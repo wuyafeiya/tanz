@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 
 /**
  * @typedef {Object} SsrNode
@@ -28,6 +28,28 @@ export async function loadSsrNodes(filePath) {
   }
 
   return data.map(validateSsrNode)
+}
+
+/**
+ * @param {string} filePath
+ * @param {SsrNode[]} nodes
+ */
+export async function saveSsrNodes(filePath, nodes) {
+  const content = JSON.stringify(nodes.map(node => ({
+    id: node.id,
+    name: node.name,
+    server: node.server,
+    port: node.port,
+    cipher: node.cipher,
+    password: node.password,
+    protocol: node.protocol,
+    protocolParam: node.protocolParam,
+    obfs: node.obfs,
+    obfsParam: node.obfsParam,
+    udp: node.udp,
+  })), null, 2)
+
+  await writeFile(filePath, `${content}\n`, 'utf8')
 }
 
 /**

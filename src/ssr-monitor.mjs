@@ -1,11 +1,14 @@
 import { spawn } from 'node:child_process'
+import { lookup } from 'node:dns/promises'
 import { once } from 'node:events'
 import { createServer as createHttpServer } from 'node:http'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer as createNetServer } from 'node:net'
+import { isIP } from 'node:net'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { saveSsrNodes } from './ssr-config.mjs'
 
 /**
  * @typedef {import('./ssr-config.mjs').SsrNode} SsrNode
@@ -21,9 +24,10 @@ const DEFAULT_PORT = 3466
 
 /**
  * @param {SsrNode[]} nodes
- * @param {{ intervalSeconds?: number, requestTimeoutSeconds?: number, targetUrl?: string, mihomoBinary?: string, telegramBotToken?: string, telegramChatId?: string, telegramProxy?: string, host?: string, port?: number }} options
+ * @param {{ configFile?: string, intervalSeconds?: number, requestTimeoutSeconds?: number, targetUrl?: string, mihomoBinary?: string, telegramBotToken?: string, telegramChatId?: string, telegramProxy?: string, host?: string, port?: number }} options
  */
 export async function createSsrMonitor(nodes, options = {}) {
+  const configFile = options.configFile
   const intervalSeconds = normalizePositiveInt(options.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS, '轮询间隔')
   const requestTimeoutSeconds = normalizePositiveInt(options.requestTimeoutSeconds ?? DEFAULT_REQUEST_TIMEOUT_SECONDS, '请求超时')
   const targetUrl = options.targetUrl ?? DEFAULT_TARGET_URL
@@ -46,11 +50,79 @@ export async function createSsrMonitor(nodes, options = {}) {
     port: node.port,
     alertActive: false,
     status: 'idle',
+    resolvedIp: undefined,
+    lastResolvedIp: undefined,
     lastError: undefined,
     lastCheckedAt: undefined,
   }))
   let nextRunAt = undefined
   let currentNodeName = undefined
+  let stopping = false
+  let loopTimer = undefined
+  let mihomo = undefined
+  let taskQueue = Promise.resolve()
+
+  const enqueueTask = task => {
+    const result = taskQueue.then(task, task)
+    taskQueue = result.catch(() => {})
+    return result
+  }
+
+  const writeCurrentConfig = async () => {
+    const configText = buildMihomoConfig(nodes, {
+      socksPort,
+      controllerPort,
+      secret,
+      groupName,
+    })
+    await writeFile(configPath, configText, 'utf8')
+  }
+
+  const startMihomo = async () => {
+    mihomo = spawn(mihomoBinary, ['-f', configPath], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    mihomo.stdout?.on('data', () => {})
+    mihomo.stderr?.on('data', () => {})
+    await waitForController(controllerPort, secret)
+  }
+
+  const stopMihomo = async () => {
+    if (!mihomo) {
+      return
+    }
+    const current = mihomo
+    mihomo = undefined
+    current.kill('SIGTERM')
+    await Promise.race([once(current, 'exit'), sleep(1500)]).catch(() => {})
+    if (!current.killed) {
+      current.kill('SIGKILL')
+    }
+  }
+
+  const restartMihomo = async () => {
+    await stopMihomo()
+    await writeCurrentConfig()
+    await startMihomo()
+  }
+
+  const scheduleNextCycle = () => {
+    if (stopping) {
+      return
+    }
+    clearTimeout(loopTimer)
+    console.log(`[SSR] 等待 ${intervalSeconds} 秒后进入下一轮`)
+    currentNodeName = undefined
+    nextRunAt = new Date(Date.now() + intervalSeconds * 1000).toISOString()
+    loopTimer = setTimeout(() => {
+      nextRunAt = undefined
+      void enqueueTask(async () => {
+        await runCycle()
+        scheduleNextCycle()
+      })
+    }, intervalSeconds * 1000)
+  }
+
   const httpServer = createHttpServer((request, response) => {
     const pathname = new URL(request.url ?? '/', 'http://localhost').pathname
 
@@ -80,29 +152,64 @@ export async function createSsrMonitor(nodes, options = {}) {
       return
     }
 
+    if (pathname === '/api/node-server' && request.method === 'POST') {
+      void handleNodeServerUpdate(request, response)
+      return
+    }
+
     response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' })
     response.end(JSON.stringify({ error: 'not found' }))
   })
 
-  const configText = buildMihomoConfig(nodes, {
-    socksPort,
-    controllerPort,
-    secret,
-    groupName,
-  })
-  await writeFile(configPath, configText, 'utf8')
+  await writeCurrentConfig()
+  await startMihomo()
 
-  const mihomo = spawn(mihomoBinary, ['-f', configPath], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
+  async function handleNodeServerUpdate(request, response) {
+    try {
+      const body = await readJsonBody(request)
+      const id = typeof body.id === 'string' ? body.id : ''
+      const server = typeof body.server === 'string' ? body.server.trim() : ''
 
-  let stopping = false
-  mihomo.stdout?.on('data', () => {})
-  mihomo.stderr?.on('data', () => {})
+      if (!id || !server) {
+        throw new Error('节点 id 和 server 不能为空')
+      }
 
-  await waitForController(controllerPort, secret)
+      const node = nodes.find(item => item.id === id)
+      const current = state.find(item => item.id === id)
+      if (!node || !current) {
+        throw new Error('节点不存在')
+      }
 
-  let loopTimer = undefined
+      node.server = server
+      current.server = server
+      current.status = 'idle'
+      current.lastError = undefined
+      current.lastCheckedAt = undefined
+      current.resolvedIp = undefined
+
+      if (configFile) {
+        await saveSsrNodes(configFile, nodes)
+      }
+
+      clearTimeout(loopTimer)
+      nextRunAt = undefined
+      await enqueueTask(async () => {
+        await restartMihomo()
+        for (const item of nodes) {
+          console.log(`[SSR] 已加载节点: ${item.name} -> ${item.server}:${item.port}`)
+        }
+        await runCycle()
+        scheduleNextCycle()
+      })
+
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ ok: true }))
+    }
+    catch (error) {
+      response.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ error: formatError(error) }))
+    }
+  }
 
   async function runCycle() {
     for (const node of nodes) {
@@ -117,6 +224,10 @@ export async function createSsrMonitor(nodes, options = {}) {
 
       try {
         currentNodeName = node.name
+        current.resolvedIp = await resolveServerIp(node.server)
+        if (current.resolvedIp) {
+          current.lastResolvedIp = current.resolvedIp
+        }
         console.log(`[SSR] 切换节点: ${node.name} -> ${node.server}:${node.port}`)
         await selectProxy(controllerPort, secret, groupName, node.name)
         await sleep(300)
@@ -128,7 +239,7 @@ export async function createSsrMonitor(nodes, options = {}) {
 
         if (current.alertActive) {
           current.alertActive = false
-          await sendTelegramAlert(telegram, `✅ SSR 节点恢复\n${node.name}\n${node.server}:${node.port}`)
+          await sendTelegramAlert(telegram, `✅ SSR 节点恢复\n${buildNodeAlertLabel(node, current)}`)
         }
       }
       catch (error) {
@@ -139,19 +250,9 @@ export async function createSsrMonitor(nodes, options = {}) {
 
         if (!current.alertActive) {
           current.alertActive = true
-          await sendTelegramAlert(telegram, `⚠️ SSR 节点疑似故障\n${node.name}\n${node.server}:${node.port}\n${current.lastError}`)
+          await sendTelegramAlert(telegram, `⚠️ SSR 节点疑似故障\n${buildNodeAlertLabel(node, current)}`)
         }
       }
-    }
-
-    if (!stopping) {
-      console.log(`[SSR] 等待 ${intervalSeconds} 秒后进入下一轮`)
-      currentNodeName = undefined
-      nextRunAt = new Date(Date.now() + intervalSeconds * 1000).toISOString()
-      loopTimer = setTimeout(() => {
-        nextRunAt = undefined
-        void runCycle()
-      }, intervalSeconds * 1000)
     }
   }
 
@@ -171,7 +272,10 @@ export async function createSsrMonitor(nodes, options = {}) {
         httpServer.listen(port, host)
       })
 
-      void runCycle()
+      void enqueueTask(async () => {
+        await runCycle()
+        scheduleNextCycle()
+      })
       for (const node of nodes) {
         console.log(`[SSR] 已加载节点: ${node.name} -> ${node.server}:${node.port}`)
       }
@@ -194,11 +298,7 @@ export async function createSsrMonitor(nodes, options = {}) {
       await new Promise(resolve => {
         httpServer.close(() => resolve(undefined))
       })
-      mihomo.kill('SIGTERM')
-      await Promise.race([once(mihomo, 'exit'), sleep(1500)]).catch(() => {})
-      if (!mihomo.killed) {
-        mihomo.kill('SIGKILL')
-      }
+      await stopMihomo()
       await rm(tempDir, { recursive: true, force: true }).catch(() => {})
     },
   }
@@ -447,6 +547,37 @@ function formatError(error) {
   return error instanceof Error ? error.message : String(error)
 }
 
+async function resolveServerIp(server) {
+  if (isIP(server)) {
+    return server
+  }
+
+  try {
+    const result = await lookup(server, { family: 4 })
+    return result.address
+  }
+  catch {
+    return undefined
+  }
+}
+
+function buildNodeAlertLabel(node, current) {
+  return `${node.name}-${current.lastResolvedIp ?? current.resolvedIp ?? node.server}`
+}
+
+async function readJsonBody(request) {
+  let body = ''
+  for await (const chunk of request) {
+    body += chunk.toString()
+  }
+
+  if (!body.trim()) {
+    return {}
+  }
+
+  return JSON.parse(body)
+}
+
 function renderSsrDashboardHtml() {
   return `<!doctype html>
 <html lang="zh-CN">
@@ -469,6 +600,10 @@ function renderSsrDashboardHtml() {
       .node { display: grid; grid-template-columns: 1fr auto; gap: 12px; }
       .node h2 { margin: 0 0 6px; font-size: 18px; }
       .meta { color: #66778f; font-size: 14px; margin-bottom: 6px; }
+      .server-form { display: flex; gap: 8px; margin-top: 10px; }
+      .server-input { flex: 1; border: 1px solid #c9d5e5; border-radius: 10px; padding: 10px 12px; font: inherit; }
+      .save-button { border: 0; border-radius: 10px; background: #122033; color: #fff; padding: 10px 14px; font: inherit; cursor: pointer; }
+      .save-button:disabled { opacity: 0.55; cursor: default; }
       .status { display: inline-flex; align-items: center; gap: 8px; border-radius: 999px; padding: 8px 12px; font-weight: 700; }
       .status.up { background: #e7f8ee; color: #137a43; }
       .status.down { background: #ffeaea; color: #c73a3a; }
@@ -503,6 +638,8 @@ function renderSsrDashboardHtml() {
       const currentNode = document.getElementById('current-node')
       const nextRun = document.getElementById('next-run')
       const nodeList = document.getElementById('node-list')
+      const drafts = new Map()
+      const saving = new Set()
 
       function formatDateTime(value) {
         if (!value) return '未开始'
@@ -536,16 +673,60 @@ function renderSsrDashboardHtml() {
         for (const node of snapshot.nodes) {
           const item = document.createElement('article')
           item.className = 'node'
+          const draft = drafts.get(node.id) ?? node.server
           item.innerHTML = \`
             <div>
               <h2>\${node.name}</h2>
               <div class="meta">\${node.server}:\${node.port}</div>
+              <div class="meta">当前解析 IP：\${node.resolvedIp || node.lastResolvedIp || '-'}</div>
               <div class="meta">最后检测：\${formatDateTime(node.lastCheckedAt)}</div>
               <div class="meta">\${node.lastError ? '最近错误：' + node.lastError : '最近一次检测正常'}</div>
+              <div class="server-form">
+                <input class="server-input" data-id="\${node.id}" value="\${draft}" />
+                <button class="save-button" data-id="\${node.id}" \${saving.has(node.id) ? 'disabled' : ''}>保存 server</button>
+              </div>
             </div>
             <div class="status \${node.status === 'up' ? 'up' : node.status === 'down' ? 'down' : 'idle'}">\${node.status.toUpperCase()}</div>
           \`
           nodeList.appendChild(item)
+        }
+
+        for (const input of nodeList.querySelectorAll('.server-input')) {
+          input.addEventListener('input', event => {
+            drafts.set(event.target.dataset.id, event.target.value)
+          })
+        }
+
+        for (const button of nodeList.querySelectorAll('.save-button')) {
+          button.addEventListener('click', async event => {
+            const id = event.target.dataset.id
+            const server = (drafts.get(id) || '').trim()
+            if (!server) {
+              window.alert('server 不能为空')
+              return
+            }
+            saving.add(id)
+            render(snapshot)
+            try {
+              const response = await fetch('/api/node-server', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ id, server }),
+              })
+              const result = await response.json()
+              if (!response.ok) {
+                throw new Error(result.error || '保存失败')
+              }
+              drafts.delete(id)
+              await refresh()
+            }
+            catch (error) {
+              window.alert(error instanceof Error ? error.message : String(error))
+            }
+            finally {
+              saving.delete(id)
+            }
+          })
         }
       }
 

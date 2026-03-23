@@ -14,6 +14,7 @@ async function main() {
   }
 
   const monitor = await createSsrMonitor(nodes, {
+    configFile,
     intervalSeconds: args.intervalSeconds,
     requestTimeoutSeconds: args.requestTimeoutSeconds,
     targetUrl: args.targetUrl,
