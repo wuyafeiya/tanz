@@ -22,6 +22,7 @@ const DEFAULT_TELEGRAM_PROXY = process.env.TELEGRAM_PROXY ?? 'http://127.0.0.1:7
 const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_PORT = 3466
 const DEFAULT_SITE_NAME = 'origin'
+const FAILURE_RECHECK_DELAYS_MS = [5_000, 3_000]
 
 /**
  * @param {SsrNode[]} nodes
@@ -222,17 +223,18 @@ export async function createSsrMonitor(nodes, options = {}) {
 
       try {
         currentNodeName = node.name
-        current.resolvedIp = await resolveServerIp(node.server)
-        if (current.resolvedIp) {
-          current.lastResolvedIp = current.resolvedIp
-        }
-        await selectProxy(controllerPort, secret, groupName, node.name)
-        await sleep(300)
-        const probe = await runCurlProbe(socksPort, targetUrl, requestTimeoutSeconds)
+        const probe = await probeNodeWithConfirmation(node, current, {
+          controllerPort,
+          secret,
+          groupName,
+          socksPort,
+          targetUrl,
+          requestTimeoutSeconds,
+        })
         current.lastCheckedAt = new Date().toISOString()
         current.lastError = undefined
         current.status = 'up'
-        current.lastProbeSeconds = Number(probe.timeTotal)
+        current.lastProbeSeconds = probe.timeTotalSeconds
 
         if (current.alertActive) {
           current.alertActive = false
@@ -243,7 +245,7 @@ export async function createSsrMonitor(nodes, options = {}) {
         current.lastCheckedAt = new Date().toISOString()
         current.lastError = formatError(error)
         current.status = 'down'
-        current.lastProbeSeconds = undefined
+        current.lastProbeSeconds = Number.NaN
 
         if (!current.alertActive) {
           current.alertActive = true
@@ -448,6 +450,36 @@ async function runCurlProbe(socksPort, targetUrl, timeoutSeconds) {
     timeConnect: timeConnect || '0',
     timeStartTransfer: timeStartTransfer || '0',
   }
+}
+
+async function probeNodeWithConfirmation(node, current, context) {
+  const startedAt = Date.now()
+  let lastError = undefined
+
+  for (const delayMs of [0, ...FAILURE_RECHECK_DELAYS_MS]) {
+    if (delayMs > 0) {
+      await sleep(delayMs)
+    }
+
+    current.resolvedIp = await resolveServerIp(node.server)
+    if (current.resolvedIp) {
+      current.lastResolvedIp = current.resolvedIp
+    }
+
+    try {
+      await selectProxy(context.controllerPort, context.secret, context.groupName, node.name)
+      await sleep(300)
+      await runCurlProbe(context.socksPort, context.targetUrl, context.requestTimeoutSeconds)
+      return {
+        timeTotalSeconds: (Date.now() - startedAt) / 1000,
+      }
+    }
+    catch (error) {
+      lastError = error
+    }
+  }
+
+  throw lastError ?? new Error('SSR 节点检测失败')
 }
 
 function createTelegramNotifier(botToken, chatId, proxyUrl) {
@@ -676,7 +708,7 @@ function renderSsrDashboardHtml() {
               <h2>\${node.name}</h2>
               <div class="meta">\${node.server}:\${node.port}</div>
               <div class="meta">当前解析 IP：\${node.resolvedIp || node.lastResolvedIp || '-'}</div>
-              <div class="meta">检测耗时：\${typeof node.lastProbeSeconds === 'number' ? node.lastProbeSeconds.toFixed(3) + ' 秒' : '-'}</div>
+              <div class="meta">检测耗时：\${Number.isFinite(node.lastProbeSeconds) ? node.lastProbeSeconds.toFixed(3) + ' 秒' : '-'}</div>
               <div class="meta">最后检测：\${formatDateTime(node.lastCheckedAt)}</div>
               <div class="meta">\${node.lastError ? '最近错误：' + node.lastError : '最近一次检测正常'}</div>
               <div class="server-form">
