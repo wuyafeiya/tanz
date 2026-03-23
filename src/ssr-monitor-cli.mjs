@@ -23,7 +23,21 @@ async function main() {
     telegramProxy: args.telegramProxy,
   })
 
-  await monitor.start()
+  const snapshot = await monitor.start()
+  console.log('SSR 监控已启动')
+  console.log(`mihomo 配置: ${snapshot.configPath}`)
+  console.log(`mihomo 可执行文件: ${snapshot.mihomoBinary}`)
+  console.log(`本地 SOCKS5: 127.0.0.1:${snapshot.socksPort}`)
+  console.log(`控制接口: 127.0.0.1:${snapshot.controllerPort}`)
+  console.log(`轮询间隔: ${snapshot.intervalSeconds} 秒`)
+  console.log(`请求超时: ${snapshot.requestTimeoutSeconds} 秒`)
+  console.log(`目标地址: ${snapshot.targetUrl}`)
+  if (snapshot.telegramEnabled) {
+    console.log('Telegram 通知: 已启用')
+    if (snapshot.telegramProxy) {
+      console.log(`Telegram 代理: ${snapshot.telegramProxy}`)
+    }
+  }
   console.log('按 Ctrl+C 停止 SSR 监控')
 
   const shutdown = async () => {

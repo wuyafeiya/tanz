@@ -108,16 +108,18 @@ export async function createSsrMonitor(nodes, options = {}) {
 
   return {
     async start() {
-      console.log(`SSR 监控已启动`)
-      console.log(`mihomo 配置: ${configPath}`)
-      console.log(`本地 SOCKS5: 127.0.0.1:${socksPort}`)
-      console.log(`控制接口: 127.0.0.1:${controllerPort}`)
-      console.log(`轮询间隔: ${intervalSeconds} 秒`)
-      console.log(`目标地址: ${targetUrl}`)
-      if (telegram.enabled) {
-        console.log('Telegram 通知: 已启用')
-      }
       void runCycle()
+      return {
+        intervalSeconds,
+        requestTimeoutSeconds,
+        targetUrl,
+        mihomoBinary,
+        configPath,
+        socksPort,
+        controllerPort,
+        telegramEnabled: telegram.enabled,
+        telegramProxy: telegram.proxy,
+      }
     },
     async stop() {
       stopping = true
