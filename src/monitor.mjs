@@ -43,9 +43,7 @@ export function createMonitor(nodes, options = {}) {
     inFlight: false,
   }))
   const sites = buildSiteDefinitions(nodes)
-  const siteJobs = sites.map(() => ({
-    timer: undefined,
-  }))
+  let globalCycleTimer = undefined
 
   const state = {
     startedAt: new Date().toISOString(),
@@ -392,12 +390,10 @@ export function createMonitor(nodes, options = {}) {
   }
 
   function clearSiteTimer(siteId) {
-    const siteIndex = getSiteIndex(siteId)
-    if (siteIndex < 0) {
-      return
+    const site = getSiteState(siteId)
+    if (site) {
+      site.nextCheckAt = undefined
     }
-    clearTimeout(siteJobs[siteIndex].timer)
-    siteJobs[siteIndex].timer = undefined
   }
 
   function scheduleNode(index, delayMs) {
@@ -429,6 +425,9 @@ export function createMonitor(nodes, options = {}) {
   }
 
   function triggerImmediateProbeAll() {
+    clearTimeout(globalCycleTimer)
+    globalCycleTimer = undefined
+    state.cycle.nextRunAt = undefined
     for (const site of state.sites) {
       resetSiteState(site.id)
       scheduleSiteNodes(site.id, 0)
@@ -452,19 +451,7 @@ export function createMonitor(nodes, options = {}) {
       return
     }
 
-    let nextRunAtMs = Number.POSITIVE_INFINITY
-    for (const index of getSiteNodeIndexes(siteId)) {
-      const nextRunAt = state.nodes[index].nextRunAt
-      if (!nextRunAt) {
-        continue
-      }
-      const timestamp = new Date(nextRunAt).getTime()
-      if (!Number.isNaN(timestamp) && timestamp < nextRunAtMs) {
-        nextRunAtMs = timestamp
-      }
-    }
-
-    site.nextCheckAt = Number.isFinite(nextRunAtMs) ? new Date(nextRunAtMs).toISOString() : undefined
+    site.nextCheckAt = state.cycle.nextRunAt
   }
 
   function resetNodeState(index) {
@@ -689,23 +676,41 @@ export function createMonitor(nodes, options = {}) {
   }
 
   function maybeScheduleRegularSiteCycle(siteId) {
-    const site = getSiteState(siteId)
-    if (!site || site.paused) {
-      return
-    }
-
-    const nodeIndexes = getSiteNodeIndexes(siteId)
-    const hasInFlightNode = nodeIndexes.some(index => nodeJobs[index].inFlight)
+    const hasInFlightNode = nodeJobs.some(job => job.inFlight)
     if (hasInFlightNode) {
       return
     }
 
-    const hasRunningNode = nodeIndexes.some(index => state.nodes[index].status === 'running')
+    const hasRunningNode = state.nodes.some(node => node.status === 'running')
     if (hasRunningNode) {
       return
     }
 
-    scheduleSiteNodes(siteId, intervalSeconds * 1000)
+    if (globalCycleTimer) {
+      return
+    }
+
+    const runAtMs = Date.now() + intervalSeconds * 1000
+    state.cycle.nextRunAt = new Date(runAtMs).toISOString()
+    for (const site of state.sites) {
+      if (!site.paused) {
+        site.nextCheckAt = state.cycle.nextRunAt
+      }
+    }
+
+    globalCycleTimer = setTimeout(() => {
+      globalCycleTimer = undefined
+      state.cycle.nextRunAt = undefined
+      for (const site of state.sites) {
+        if (site.paused) {
+          site.nextCheckAt = undefined
+          continue
+        }
+        site.nextCheckAt = undefined
+        scheduleSiteNodes(site.id, 0)
+      }
+      publish()
+    }, intervalSeconds * 1000)
   }
 }
 
