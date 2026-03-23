@@ -623,7 +623,8 @@ export function createMonitor(nodes, options = {}) {
     const downNodes = siteNodes.filter(node => node.status === 'down' || node.status === 'paused').length
     const runningNodes = siteNodes.filter(node => node.status === 'running').length
     const checkedNodes = siteNodes.filter(node => node.lastCheckedAt).length
-    const allDown = checkedNodes === siteNodes.length && siteNodes.length > 0 && upNodes === 0 && runningNodes === 0
+    const anyDown = checkedNodes === siteNodes.length && siteNodes.length > 0 && downNodes > 0 && runningNodes === 0
+    const allRecovered = checkedNodes === siteNodes.length && siteNodes.length > 0 && downNodes === 0 && runningNodes === 0
 
     site.upNodes = upNodes
     site.downNodes = downNodes
@@ -646,10 +647,10 @@ export function createMonitor(nodes, options = {}) {
       site.status = 'idle'
     }
 
-    if (!allDown) {
+    if (allRecovered) {
       const hadAlert = site.alertActive || resumedFromPause
       if (hadAlert) {
-        const alert = createAlert('ok', '站点恢复', site.name)
+        const alert = createAlert('ok', '站点恢复', buildSiteAlertMessage(site, siteNodes, 'up'))
         pushAlert(alert)
         await sendTelegramAlert(telegram, alert)
       }
@@ -658,12 +659,12 @@ export function createMonitor(nodes, options = {}) {
       return
     }
 
-    if (!site.alertActive) {
+    if (anyDown && !site.alertActive) {
       site.alertActive = true
       site.escalationStage = 0
       site.lastAlertAt = new Date().toISOString()
-      site.pauseReason = '站点当前全部节点不可用，继续正常轮询等待恢复'
-      const alert = createAlert('down', '站点疑似故障', site.name)
+      site.pauseReason = '站点内存在异常节点，继续正常轮询等待恢复'
+      const alert = createAlert('down', '站点疑似故障', buildSiteAlertMessage(site, siteNodes, 'down'))
       pushAlert(alert)
       await sendTelegramAlert(telegram, alert)
       return
@@ -721,6 +722,14 @@ function createAlert(level, title, message) {
     message,
     at: new Date().toISOString(),
   }
+}
+
+function buildSiteAlertMessage(site, siteNodes, mode) {
+  const targetNode = mode === 'down'
+    ? siteNodes.find(node => node.status === 'down' || node.status === 'paused') ?? siteNodes[0]
+    : siteNodes.find(node => node.status === 'up') ?? siteNodes[0]
+  const targetAddress = targetNode?.resolvedIp ?? targetNode?.server ?? '-'
+  return `${site.name}-${targetAddress}`
 }
 
 async function sendTelegramAlert(telegram, alert) {
