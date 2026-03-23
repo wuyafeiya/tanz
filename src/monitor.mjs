@@ -82,6 +82,8 @@ export function createMonitor(nodes, options = {}) {
       port: node.port,
       resolvedIp: isIP(node.server) ? node.server : undefined,
       resolvedAt: isIP(node.server) ? new Date().toISOString() : undefined,
+      lastResolvedIp: isIP(node.server) ? node.server : undefined,
+      lastResolvedAt: isIP(node.server) ? new Date().toISOString() : undefined,
       resolveError: undefined,
       status: 'idle',
       consecutiveFailures: 0,
@@ -465,6 +467,8 @@ export function createMonitor(nodes, options = {}) {
     current.lastError = undefined
     current.resolvedIp = isIP(current.server) ? current.server : undefined
     current.resolvedAt = isIP(current.server) ? new Date().toISOString() : undefined
+    current.lastResolvedIp = isIP(current.server) ? current.server : current.lastResolvedIp
+    current.lastResolvedAt = isIP(current.server) ? new Date().toISOString() : current.lastResolvedAt
     current.resolveError = undefined
     current.currentAttempt = 0
     current.currentAttemptMax = state.settings.retryAttempts
@@ -593,6 +597,8 @@ export function createMonitor(nodes, options = {}) {
     if (isIP(current.server)) {
       current.resolvedIp = current.server
       current.resolvedAt = new Date().toISOString()
+      current.lastResolvedIp = current.server
+      current.lastResolvedAt = current.resolvedAt
       current.resolveError = undefined
       return
     }
@@ -602,6 +608,8 @@ export function createMonitor(nodes, options = {}) {
       const preferred = records.find(record => record.family === 4) ?? records[0]
       current.resolvedIp = preferred?.address
       current.resolvedAt = new Date().toISOString()
+      current.lastResolvedIp = preferred?.address ?? current.lastResolvedIp
+      current.lastResolvedAt = preferred?.address ? current.resolvedAt : current.lastResolvedAt
       current.resolveError = preferred ? undefined : '未解析到 IP'
     }
     catch (error) {
@@ -728,7 +736,7 @@ function buildSiteAlertMessage(site, siteNodes, mode) {
   const targetNode = mode === 'down'
     ? siteNodes.find(node => node.status === 'down' || node.status === 'paused') ?? siteNodes[0]
     : siteNodes.find(node => node.status === 'up') ?? siteNodes[0]
-  const targetAddress = targetNode?.resolvedIp ?? targetNode?.server ?? '-'
+  const targetAddress = targetNode?.lastResolvedIp ?? targetNode?.resolvedIp ?? targetNode?.server ?? '-'
   return `${site.name}-${targetAddress}`
 }
 
