@@ -520,6 +520,7 @@ export function renderDashboardHtml(options) {
         <article class="stat"><strong id="count-total">0</strong><span>总站点数</span></article>
         <article class="stat"><strong id="count-up">0</strong><span>当前可用站点</span></article>
         <article class="stat"><strong id="count-down">0</strong><span>当前不可用站点</span></article>
+        <article class="stat"><strong id="cycle-duration">-</strong><span>整轮耗时</span></article>
         <article class="stat"><strong id="next-run">-</strong><span>下次轮询</span></article>
       </section>
 
@@ -563,6 +564,7 @@ export function renderDashboardHtml(options) {
       const countTotal = document.getElementById('count-total')
       const countUp = document.getElementById('count-up')
       const countDown = document.getElementById('count-down')
+      const cycleDuration = document.getElementById('cycle-duration')
       const nextRun = document.getElementById('next-run')
       const footerNote = document.getElementById('footer-note')
       const alertMeta = document.getElementById('alert-meta')
@@ -806,6 +808,11 @@ export function renderDashboardHtml(options) {
               : node.lastCheckedAt
                 ? '最近一次探测正常'
                 : '等待首轮探测'
+            const resolveText = node.resolvedIp
+              ? '当前解析 IP：' + node.resolvedIp
+              : node.resolveError
+                ? '域名解析失败：' + node.resolveError
+                : '当前解析 IP：待解析'
             const stateText = node.paused
               ? (node.pauseReason || '已暂停轮询')
               : '最近恢复：' + formatDateTime(node.lastOkAt)
@@ -817,10 +824,12 @@ export function renderDashboardHtml(options) {
                   <span class="meta">\${node.type.toUpperCase()} · \${node.server}:\${node.port}</span>
                 </div>
                 <div class="node-sub">\${errorText}</div>
+                <div class="node-sub">\${resolveText}</div>
                 <div class="badges">
                   <span class="badge"><span class="dot \${nodeStatusClass(node.status)}"></span>连续失败 \${node.consecutiveFailures} 次</span>
                   <span class="badge">\${node.status === 'running' && node.attemptStartedAt ? '当前耗时' : '本轮耗时'} <span data-node-live-clock="\${node.id}">\${node.status === 'running' && node.attemptStartedAt ? formatLiveSeconds(node.attemptStartedAt) + 's' : formatDurationSeconds(node.lastDurationMs) + ' 秒'}</span></span>
                   <span class="badge">最后探测 \${formatDateTime(node.lastCheckedAt)}</span>
+                  <span class="badge">解析时间 \${formatDateTime(node.resolvedAt)}</span>
                   <span class="badge" data-node-attempt-label="\${node.id}">\${node.paused ? '已暂停轮询' : node.status === 'running' && node.currentAttempt > 0 ? '第 ' + node.currentAttempt + '/' + node.currentAttemptMax + ' 次尝试' : '失败即时重试 ' + (latestSnapshot?.settings?.retryAttempts ?? 3) + ' 次'}</span>
                 </div>
                 <div class="node-editor">
@@ -870,6 +879,7 @@ export function renderDashboardHtml(options) {
         countTotal.textContent = String(summary.total)
         countUp.textContent = String(summary.up)
         countDown.textContent = String(summary.down)
+        cycleDuration.textContent = cycle.lastDurationMs ? (formatDurationSeconds(cycle.lastDurationMs) + ' 秒') : '-'
         renderNextRun()
         cycleMeta.textContent = cycle.running
           ? '当前正在执行一轮探测…'

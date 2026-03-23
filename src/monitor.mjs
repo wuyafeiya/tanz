@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process'
+import { lookup } from 'node:dns/promises'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
+import { isIP } from 'node:net'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { updateNodeServer } from './config.mjs'
 import { renderDashboardHtml } from './dashboard.mjs'
@@ -66,6 +68,7 @@ export function createMonitor(nodes, options = {}) {
       running: false,
       lastStartedAt: undefined,
       lastCompletedAt: undefined,
+      lastDurationMs: undefined,
       nextRunAt: undefined,
     },
     summary: {
@@ -81,6 +84,9 @@ export function createMonitor(nodes, options = {}) {
       type: node.type,
       server: node.server,
       port: node.port,
+      resolvedIp: isIP(node.server) ? node.server : undefined,
+      resolvedAt: isIP(node.server) ? new Date().toISOString() : undefined,
+      resolveError: undefined,
       status: 'idle',
       consecutiveFailures: 0,
       alertActive: false,
@@ -329,7 +335,17 @@ export function createMonitor(nodes, options = {}) {
   }
 
   function syncGlobalState() {
-    state.cycle.running = nodeJobs.some(job => job.inFlight)
+    const running = nodeJobs.some(job => job.inFlight)
+    const wasRunning = state.cycle.running
+    state.cycle.running = running
+
+    if (!running && wasRunning && state.cycle.lastStartedAt && state.cycle.lastCompletedAt) {
+      const startedAt = new Date(state.cycle.lastStartedAt).getTime()
+      const completedAt = new Date(state.cycle.lastCompletedAt).getTime()
+      if (!Number.isNaN(startedAt) && !Number.isNaN(completedAt) && completedAt >= startedAt) {
+        state.cycle.lastDurationMs = completedAt - startedAt
+      }
+    }
 
     let nextRunAtMs = Number.POSITIVE_INFINITY
     let up = 0
@@ -462,6 +478,9 @@ export function createMonitor(nodes, options = {}) {
     current.pauseReason = undefined
     current.escalationStage = 0
     current.lastError = undefined
+    current.resolvedIp = isIP(current.server) ? current.server : undefined
+    current.resolvedAt = isIP(current.server) ? new Date().toISOString() : undefined
+    current.resolveError = undefined
     current.currentAttempt = 0
     current.currentAttemptMax = state.settings.retryAttempts
     current.attemptStartedAt = undefined
@@ -520,10 +539,13 @@ export function createMonitor(nodes, options = {}) {
 
     clearNodeTimer(index)
     job.inFlight = true
-    state.cycle.lastStartedAt = new Date().toISOString()
+    if (!state.cycle.running) {
+      state.cycle.lastStartedAt = new Date().toISOString()
+    }
     publish()
 
     try {
+      await resolveNodeServer(current)
       const result = await probeNodeWithRetry(node, {
         targetUrl: state.settings.targetUrl,
         startupTimeoutMs: state.settings.startupTimeoutMs,
@@ -556,7 +578,6 @@ export function createMonitor(nodes, options = {}) {
         current.lastError = undefined
         current.consecutiveFailures = 0
 
-        scheduleNode(index, intervalSeconds * 1000)
         await evaluateSiteState(current.siteId, resumedFromPause)
         return
       }
@@ -573,13 +594,35 @@ export function createMonitor(nodes, options = {}) {
         ))
       }
 
-      scheduleNode(index, intervalSeconds * 1000)
       await evaluateSiteState(current.siteId, resumedFromPause)
     }
     finally {
       job.inFlight = false
       state.cycle.lastCompletedAt = new Date().toISOString()
+      maybeScheduleRegularSiteCycle(current.siteId)
       publish()
+    }
+  }
+
+  async function resolveNodeServer(current) {
+    if (isIP(current.server)) {
+      current.resolvedIp = current.server
+      current.resolvedAt = new Date().toISOString()
+      current.resolveError = undefined
+      return
+    }
+
+    try {
+      const records = await lookup(current.server, { all: true })
+      const preferred = records.find(record => record.family === 4) ?? records[0]
+      current.resolvedIp = preferred?.address
+      current.resolvedAt = new Date().toISOString()
+      current.resolveError = preferred ? undefined : '未解析到 IP'
+    }
+    catch (error) {
+      current.resolvedIp = undefined
+      current.resolvedAt = new Date().toISOString()
+      current.resolveError = error instanceof Error ? error.message : String(error)
     }
   }
 
@@ -674,6 +717,7 @@ export function createMonitor(nodes, options = {}) {
 
     if (!allDown) {
       await evaluateSiteState(siteId)
+      maybeScheduleRegularSiteCycle(siteId)
       publish()
       return
     }
@@ -709,6 +753,26 @@ export function createMonitor(nodes, options = {}) {
   function pushAlert(alert) {
     state.alerts.unshift(alert)
     state.alerts = state.alerts.slice(0, MAX_ALERTS)
+  }
+
+  function maybeScheduleRegularSiteCycle(siteId) {
+    const site = getSiteState(siteId)
+    if (!site || site.paused || site.alertActive) {
+      return
+    }
+
+    const nodeIndexes = getSiteNodeIndexes(siteId)
+    const hasInFlightNode = nodeIndexes.some(index => nodeJobs[index].inFlight)
+    if (hasInFlightNode) {
+      return
+    }
+
+    const hasRunningNode = nodeIndexes.some(index => state.nodes[index].status === 'running')
+    if (hasRunningNode) {
+      return
+    }
+
+    scheduleSiteNodes(siteId, intervalSeconds * 1000)
   }
 }
 
