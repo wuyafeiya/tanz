@@ -1,0 +1,28 @@
+[
+  {
+    "id": "hk-pro-11",
+    "name": "HK PRO 11",
+    "server": "su813nd.cdn.ns186.com",
+    "port": 5111,
+    "cipher": "rc4-md5",
+    "password": "OriginCloud",
+    "protocol": "auth_aes128_md5",
+    "protocolParam": "36551:test23",
+    "obfs": "http_simple",
+    "obfsParam": "appleid.apple.com/8b10e36551",
+    "udp": false
+  },
+  {
+    "id": "hk-pro-12",
+    "name": "HK PRO 12",
+    "server": "hdua7i9n.cdn.ns186.com",
+    "port": 5112,
+    "cipher": "rc4-md5",
+    "password": "OriginCloud",
+    "protocol": "auth_aes128_md5",
+    "protocolParam": "36551:test23",
+    "obfs": "http_simple",
+    "obfsParam": "appleid.apple.com/8b10e36551",
+    "udp": false
+  }
+]

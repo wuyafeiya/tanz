@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "probe": "node src/cli.mjs",
-    "monitor": "node src/monitor-cli.mjs"
+    "monitor": "node src/monitor-cli.mjs",
+    "ssr-monitor": "node src/ssr-monitor-cli.mjs"
   }
 }

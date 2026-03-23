@@ -1,0 +1,15 @@
+[
+  {
+    "id": "hk-ssr-01",
+    "name": "HK SSR 01",
+    "server": "example.com",
+    "port": 443,
+    "cipher": "aes-256-cfb",
+    "password": "your-password",
+    "protocol": "auth_aes128_md5",
+    "protocolParam": "",
+    "obfs": "tls1.2_ticket_auth",
+    "obfsParam": "",
+    "udp": false
+  }
+]

@@ -128,3 +128,24 @@ SG SS 02    DOWN    curl: (28) Connection timed out after 10002 milliseconds
 
 - 当前不支持从订阅链接自动导入
 - 浏览器通知依赖页面授予通知权限
+
+## SSR 单独监控
+
+如果你只有少量 `ssr` 节点，建议不要继续混进主监控，而是单独使用 `mihomo` 常驻测试。
+
+这个仓库现在额外提供了一个独立命令：
+
+```bash
+cp ssr-nodes.example.json ssr-nodes.json
+pnpm ssr-monitor --config ./ssr-nodes.json
+```
+
+它的工作方式是：
+
+1. 启动一个临时 `mihomo` 内核
+2. 把 `ssr-nodes.json` 里的 SSR 节点写进配置
+3. 通过 Mihomo API 切换当前节点
+4. 用 `curl` 走本地 SOCKS5 端口测试目标地址
+5. 首次失败时发一次 Telegram，恢复时再发一次 Telegram
+
+最小 SSR 配置示例见 [ssr-nodes.example.json](./ssr-nodes.example.json)。
