@@ -542,13 +542,15 @@ export function createMonitor(nodes, options = {}) {
     publish()
 
     try {
-      await resolveNodeServer(current)
-      const result = await probeNodeWithRetry(node, {
+      const result = await probeNodeWithCacheFallback(node, current, {
         targetUrl: state.settings.targetUrl,
         startupTimeoutMs: state.settings.startupTimeoutMs,
         requestTimeoutSeconds: state.settings.requestTimeoutSeconds,
         retryAttempts: state.settings.retryAttempts,
         retryDelayMs: state.settings.retryDelayMs,
+        async resolveServer() {
+          await resolveNodeServer(current)
+        },
         onAttemptStart(attempt, maxAttempts) {
           current.status = 'running'
           current.currentAttempt = attempt
@@ -883,6 +885,29 @@ async function probeNodeWithRetry(node, options) {
     error: lastResult?.error,
     retryAttemptsUsed: retryAttempts,
   }
+}
+
+async function probeNodeWithCacheFallback(node, current, options) {
+  const useCachedIp = !isIP(current.server) && current.status === 'up' && typeof current.lastResolvedIp === 'string' && current.lastResolvedIp.length > 0
+
+  if (useCachedIp) {
+    current.resolvedIp = current.lastResolvedIp
+    current.resolvedAt = current.lastResolvedAt
+    current.resolveSource = 'cached-ip'
+    current.resolveError = undefined
+
+    const cachedResult = await probeNodeWithRetry({ ...node, server: current.lastResolvedIp }, options)
+    if (cachedResult.ok) {
+      return cachedResult
+    }
+
+    await options.resolveServer()
+  }
+  else {
+    await options.resolveServer()
+  }
+
+  return await probeNodeWithRetry(node, options)
 }
 
 function respondHtml(response, html) {
