@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { lookup } from 'node:dns/promises'
+import { lookup, Resolver } from 'node:dns/promises'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { isIP } from 'node:net'
@@ -18,6 +18,12 @@ const DEFAULT_RETRY_DELAY_MS = 800
 const DEFAULT_ATTEMPT_STARTUP_TIMEOUT_MS = 2000
 const DEFAULT_ATTEMPT_REQUEST_TIMEOUT_SECONDS = 8
 const MAX_ALERTS = 30
+const PUBLIC_DNS_RESOLVERS = [
+  { label: 'AliDNS', servers: ['223.5.5.5', '223.6.6.6'] },
+  { label: 'Tencent DNS', servers: ['119.29.29.29'] },
+  { label: 'Cloudflare DNS', servers: ['1.1.1.1', '1.0.0.1'] },
+  { label: 'Google DNS', servers: ['8.8.8.8', '8.8.4.4'] },
+]
 
 /**
  * @typedef {import('./config.mjs').ProbeNode} ProbeNode
@@ -82,6 +88,7 @@ export function createMonitor(nodes, options = {}) {
       port: node.port,
       resolvedIp: isIP(node.server) ? node.server : undefined,
       resolvedAt: isIP(node.server) ? new Date().toISOString() : undefined,
+      resolveSource: isIP(node.server) ? 'static-ip' : undefined,
       lastResolvedIp: isIP(node.server) ? node.server : undefined,
       lastResolvedAt: isIP(node.server) ? new Date().toISOString() : undefined,
       resolveError: undefined,
@@ -467,6 +474,7 @@ export function createMonitor(nodes, options = {}) {
     current.lastError = undefined
     current.resolvedIp = isIP(current.server) ? current.server : undefined
     current.resolvedAt = isIP(current.server) ? new Date().toISOString() : undefined
+    current.resolveSource = isIP(current.server) ? 'static-ip' : undefined
     current.lastResolvedIp = isIP(current.server) ? current.server : current.lastResolvedIp
     current.lastResolvedAt = isIP(current.server) ? new Date().toISOString() : current.lastResolvedAt
     current.resolveError = undefined
@@ -597,6 +605,7 @@ export function createMonitor(nodes, options = {}) {
     if (isIP(current.server)) {
       current.resolvedIp = current.server
       current.resolvedAt = new Date().toISOString()
+      current.resolveSource = 'static-ip'
       current.lastResolvedIp = current.server
       current.lastResolvedAt = current.resolvedAt
       current.resolveError = undefined
@@ -604,10 +613,12 @@ export function createMonitor(nodes, options = {}) {
     }
 
     try {
-      const records = await lookup(current.server, { all: true })
+      const resolved = await resolveServerAddress(current.server)
+      const records = resolved.records
       const preferred = records.find(record => record.family === 4) ?? records[0]
       current.resolvedIp = preferred?.address
       current.resolvedAt = new Date().toISOString()
+      current.resolveSource = preferred?.address ? resolved.source : undefined
       current.lastResolvedIp = preferred?.address ?? current.lastResolvedIp
       current.lastResolvedAt = preferred?.address ? current.resolvedAt : current.lastResolvedAt
       current.resolveError = preferred ? undefined : '未解析到 IP'
@@ -615,6 +626,7 @@ export function createMonitor(nodes, options = {}) {
     catch (error) {
       current.resolvedIp = undefined
       current.resolvedAt = new Date().toISOString()
+      current.resolveSource = undefined
       current.resolveError = error instanceof Error ? error.message : String(error)
     }
   }
@@ -985,6 +997,40 @@ function decorateTelegramTitle(title) {
   }
 
   return title
+}
+
+async function resolveServerAddress(server) {
+  for (const provider of PUBLIC_DNS_RESOLVERS) {
+    const resolver = new Resolver()
+    resolver.setServers(provider.servers)
+
+    try {
+      const ipv4Records = await resolver.resolve4(server)
+      if (ipv4Records.length > 0) {
+        return {
+          source: provider.label,
+          records: ipv4Records.map(address => ({ address, family: 4 })),
+        }
+      }
+    }
+    catch {}
+
+    try {
+      const ipv6Records = await resolver.resolve6(server)
+      if (ipv6Records.length > 0) {
+        return {
+          source: provider.label,
+          records: ipv6Records.map(address => ({ address, family: 6 })),
+        }
+      }
+    }
+    catch {}
+  }
+
+  return {
+    source: 'system-lookup',
+    records: await lookup(server, { all: true }),
+  }
 }
 
 /**

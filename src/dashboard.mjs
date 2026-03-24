@@ -809,7 +809,7 @@ export function renderDashboardHtml(options) {
                 ? '最近一次探测正常'
                 : '等待首轮探测'
             const resolveText = node.resolvedIp
-              ? '当前解析 IP：' + node.resolvedIp
+              ? '当前解析 IP：' + node.resolvedIp + (node.resolveSource ? ' · 来源：' + node.resolveSource : '')
               : node.resolveError
                 ? '域名解析失败：' + node.resolveError + (node.lastResolvedIp ? ' · 最近成功 IP：' + node.lastResolvedIp : '')
                 : '当前解析 IP：待解析'
